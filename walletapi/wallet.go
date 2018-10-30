@@ -440,10 +440,14 @@ func (w *Wallet) Add_Transaction_Record_Funds(txdata *globals.TX_Output_Data) (a
 					err = msgpack.Unmarshal(value_bytes, &tx_wallet_temp)
 					if err == nil {
 						if tx_wallet_temp.TXdata.TXID != txdata.TXID { // transaction mismatch
+							rlog.Warnf("KICD  %s,%s,  \n%+v  \n%+v",txdata.TXID, tx_wallet_temp.TXdata.TXID, txdata,tx_wallet_temp);
+							fmt.Printf("\nKICD %s,%s\n",txdata.TXID, tx_wallet_temp.TXdata.TXID);
 							return 0, false
 						}
 
 						if tx_wallet_temp.TXdata.Index_within_tx != txdata.Index_within_tx { // index within tx mismatch
+							rlog.Warnf("KICDX  %s,%s,  \n%+v  \n%+v",txdata.TXID, tx_wallet_temp.TXdata.TXID, txdata,tx_wallet_temp);
+							fmt.Printf("\nKICDX AS 2 TXIDS %s,%s\n",txdata.TXID, tx_wallet_temp.TXdata.TXID);
 							return 0, false
 						}
 					}
@@ -965,7 +969,7 @@ func (w *Wallet) Clean() {
 	w.delete_bucket(BLOCKCHAIN_UNIVERSE, []byte(FUNDS_SPENT_WHERE))
 	w.delete_bucket(BLOCKCHAIN_UNIVERSE, []byte(FUNDS_BUCKET_OUTGOING))
 
-	w.delete_bucket(BLOCKCHAIN_UNIVERSE, []byte(RING_BUCKET))
+//	w.delete_bucket(BLOCKCHAIN_UNIVERSE, []byte(RING_BUCKET))
 	w.delete_bucket(BLOCKCHAIN_UNIVERSE, []byte(KEYIMAGE_BUCKET))
 	w.delete_bucket(BLOCKCHAIN_UNIVERSE, []byte(HEIGHT_TO_BLOCK_BUCKET))
 
