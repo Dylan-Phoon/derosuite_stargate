@@ -63,6 +63,9 @@ func (h Get_Transfer_By_TXID_Handler) ServeJSONRPC(c context.Context, params *fa
 		Unlock_time: entry.Unlock_Time,
 
 	}
+	if entry.Height == 0 {
+		return nil, &jsonrpc.Error{Code: -8, Message: fmt.Sprintf("Transaction not found. TXID %s", p.TXID)}
+	}
 
 	for i := range entry.Details.Daddress {
 		result.Transfer.Destinations = append(result.Transfer.Destinations,
