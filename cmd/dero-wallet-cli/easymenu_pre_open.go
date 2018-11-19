@@ -210,7 +210,8 @@ func handle_easymenu_pre_open_command(l *readline.Instance, line string) {
 // sets online mode, starts RPC server etc
 func common_processing(wallet *walletapi.Wallet) {
 	if globals.Arguments["--offline"].(bool) == true {
-		//offline_mode = true
+		offline_mode = true
+		return
 	} else {
 		wallet.SetOnlineMode()
 	}

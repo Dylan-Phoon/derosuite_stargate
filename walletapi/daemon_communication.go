@@ -386,40 +386,72 @@ func (w *Wallet) Rescan_From_Height(startheight uint64) {
 
 // offline file is scanned from start till finish
 func (w *Wallet) Scan_Offline_File(filename string) {
-	w.Lock()
-	defer w.Unlock()
+	//w.Lock()
+//	defer w.Unlock()
 
 	f, err := os.Open(filename)
 	if err != nil {
 		fmt.Printf("Cannot read offline data file=\"%s\"  err: %s   ", filename, err)
+		rlog.Warnf("Cannot read offline data file=\"%s\"  err: %s   ", filename, err)
 		return
 	}
 	bufreader := bufio.NewReader(f)
 	gzipreader, err := gzip.NewReader(bufreader)
 	if err != nil {
-		fmt.Printf("Error while decompressing offline data file=\"%s\"  err: %s   ", filename, err)
+		rlog.Warnf("Error while decompressing offline data file=\"%s\"  err: %s   ", filename, err)
 		return
 	}
 	defer gzipreader.Close()
 
+	// the safety cannot be tuned off in openbsd, see boltdb  documentation
+	// if we are doing major rescanning, turn of db safety features
+	// they will be activated again on resync
+	if 1==1 { // get db into async mode
+		w.Lock()
+		w.db.NoSync = true
+		w.Unlock()
+		defer func() {
+			w.Lock()
+			w.db.NoSync = false
+			w.db.Sync()
+			w.Unlock()
+		}()
+	}
+
 	// use the reader and feed the error free stream, if error occurs bailout
 	decoder := msgpack.NewDecoder(gzipreader)
-	rlog.Debugf("Scanning started")
-	for {
-		var output globals.TX_Output_Data
+	rlog.Infof("Offline scanning started")
 
-		err = decoder.Decode(&output)
-		if err == io.EOF { // reached eof
-			break
+		workers := make(chan int, runtime.GOMAXPROCS(0))
+		for i := 0; i < runtime.GOMAXPROCS(0); i++ {
+			workers <- i
 		}
-		if err != nil {
-			fmt.Printf("err while decoding msgpack stream err %s\n", err)
-			break
-		}
-		// try to consume all data sent by the daemon
-		w.Add_Transaction_Record_Funds(&output) // add the funds to wallet if they are ours
+		for {
+			var output globals.TX_Output_Data
 
-	}
+			err = decoder.Decode(&output)
+			if err == io.EOF { // reached eof
+				break
+			}
+			if err != nil {
+				rlog.Errorf("err while decoding msgpack stream err %s\n", err)
+				break
+			}
+
+			select { // quit midway if required
+			case <-w.quit:
+				return
+			default:
+			}
+
+			<-workers
+			// try to consume all data sent by the daemon
+			go func() {
+				w.Add_Transaction_Record_Funds(&output) // add the funds to wallet if they are ours
+				workers <- 0
+			}()
+
+		}
 	rlog.Debugf("Scanning finised")
 
 }

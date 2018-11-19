@@ -85,11 +85,7 @@ func handle_prompt_command(l *readline.Instance, line string) {
 		fmt.Fprintf(l.Stderr(), "Total balance    : "+color_green+"%s"+color_white+"\n\n", globals.FormatMoney12(locked_balance+balance_unlocked))
 
 	case "rescan_bc", "rescan_spent": // rescan from 0
-		if offline_mode {
-			globals.Logger.Warnf("Offline wallet rescanning NOT implemented")
-		} else {
 			rescan_bc(wallet)
-		}
 
 	case "seed": // give user his seed, if password is valid
 		if !wallet.Is_View_Only() {
@@ -260,7 +256,7 @@ func handle_prompt_command(l *readline.Instance, line string) {
 			}
 		}
 
-		offline := false
+		offline := offline_mode
 		tx, inputs, input_sum, change, err := wallet.Transfer(addr_list, amount_list, 0, payment_id, 0, 0)
 		build_relay_transaction(l, tx, inputs, input_sum, change, err, offline, amount_list)
 
@@ -679,31 +675,21 @@ func PressAnyKey(l *readline.Instance, wallet *walletapi.Wallet) {
 	return
 }
 
-/*
+
 // if we are in offline, scan default or user provided file
 // this function will replay the blockchain data in offline mode
-func trigger_offline_data_scan() {
+func trigger_offline_data_scan(wallet *walletapi.Wallet) {
 	filename := default_offline_datafile
 
 	if globals.Arguments["--offline_datafile"] != nil {
 		filename = globals.Arguments["--offline_datafile"].(string)
 	}
 
-	f, err := os.Open(filename)
-	if err != nil {
-		globals.Logger.Warnf("Cannot read offline data file=\"%s\"  err: %s   ", filename, err)
-		return
-	}
-	w := bufio.NewReader(f)
-	gzipreader, err := gzip.NewReader(w)
-	if err != nil {
-		globals.Logger.Warnf("Error while decompressing offline data file=\"%s\"  err: %s   ", filename, err)
-		return
-	}
-	defer gzipreader.Close()
-	io.Copy(pipe_writer, gzipreader)
+        globals.Logger.Infof("using offline data file=\"%s\"  ", filename)
+	
+        wallet.Scan_Offline_File(filename)
 }
-*/
+
 
 // this completer is used to complete the commands at the prompt
 // BUG, this needs to be disabled in menu mode
@@ -771,7 +757,7 @@ func usage(w io.Writer) {
 func display_seed(l *readline.Instance, wallet *walletapi.Wallet) {
 	seed := wallet.GetSeed()
 	fmt.Fprintf(l.Stderr(), color_green+"PLEASE NOTE: the following 25 words can be used to recover access to your wallet. Please write them down and store them somewhere safe and secure. Please do not store them in your email or on file storage services outside of your immediate control."+color_white+"\n")
-	fmt.Fprintf(os.Stderr, color_red+"%s"+color_white+"\n", seed)
+	fmt.Fprintf(l.Stderr(), color_red+"%s"+color_white+"\n", seed)
 
 }
 
@@ -782,17 +768,17 @@ func display_spend_key(l *readline.Instance, wallet *walletapi.Wallet) {
 
 	keys := wallet.Get_Keys()
 	if !account.ViewOnly {
-		fmt.Fprintf(os.Stderr, "spend key secret : "+color_red+"%s"+color_white+"\n", keys.Spendkey_Secret)
+		fmt.Fprintf(l.Stderr(), "spend key secret : "+color_red+"%s"+color_white+"\n", keys.Spendkey_Secret)
 	}
-	fmt.Fprintf(os.Stderr, "spend key public : %s\n", keys.Spendkey_Public)
+	fmt.Fprintf(l.Stderr(), "spend key public : %s\n", keys.Spendkey_Public)
 }
 
 //display view key
 func display_view_key(l *readline.Instance, wallet *walletapi.Wallet) {
 
 	keys := wallet.Get_Keys()
-	fmt.Fprintf(os.Stderr, "view key secret : "+color_yellow+"%s"+color_white+"\n", keys.Viewkey_Secret)
-	fmt.Fprintf(os.Stderr, "view key public : %s\n", keys.Viewkey_Public)
+	fmt.Fprintf(l.Stderr(), "view key secret : "+color_yellow+"%s"+color_white+"\n", keys.Viewkey_Secret)
+	fmt.Fprintf(l.Stderr(), "view key public : %s\n", keys.Viewkey_Public)
 
 }
 
@@ -806,6 +792,12 @@ func display_viewwallet_key(l *readline.Instance, wallet *walletapi.Wallet) {
 
 // start a rescan from block 0
 func rescan_bc(wallet *walletapi.Wallet) {
+	if offline_mode {
+                        globals.Logger.Infof("Offline wallet rescanning")
+                        wallet.Clean() // clean existing data from wallet
+                        wallet.Rescan_From_Height(0)
+                   go    trigger_offline_data_scan(wallet)
+                }  
 	if wallet.GetMode() { // trigger rescan we the wallet is online
 		wallet.Clean() // clean existing data from wallet
 		wallet.Rescan_From_Height(0)
