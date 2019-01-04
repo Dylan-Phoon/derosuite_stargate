@@ -42,10 +42,12 @@ import "io/ioutil"
 import "github.com/docopt/docopt-go"
 import log "github.com/sirupsen/logrus"
 import "github.com/ybbus/jsonrpc"
+import "github.com/vmihailenco/msgpack"
 
 import "github.com/deroproject/derosuite/block"
 import "github.com/deroproject/derosuite/crypto"
 import "github.com/deroproject/derosuite/globals"
+import "github.com/deroproject/derosuite/address"
 import "github.com/deroproject/derosuite/transaction"
 import "github.com/deroproject/derosuite/structures"
 import "github.com/deroproject/derosuite/proof"
@@ -166,6 +168,7 @@ type txinfo struct {
 	Keyimages    []string // key images within tx
 	OutAddress   []string // contains output secret key
 	OutOffset    []uint64 // contains index offsets
+	OutAmount    []string // contains output amounts
 	Type         string   // ringct or ruffct ( bulletproof)
 	ValidBlock   string   // the tx is valid in which block
 	InvalidBlock []string // the tx is invalid in which block
@@ -183,7 +186,15 @@ type txinfo struct {
 	Proof_amount string // decoded amount 
 	Proof_PayID8 string // decrypted 8 byte payment id
 	Proof_error  string // error if any while decoding proof
-
+	SC_TX_Available   string //bool   // whether this contains an SC TX 
+	SC_Signer string  // whether SC signer
+	SC_Signer_verified string  // whether SC signer  can be verified successfully
+	SC_DataSize  int64
+	SC_Balance    uint64  // SC SC_Balance in atomic units
+	SC_Balance_string string // SC_Balance in DERO
+	SC_Keys         map[string]string // SC key value of 
+	
+	SC_TX transaction.SC_Transaction 
 }
 
 // any information for block which needs to be printed
@@ -360,6 +371,14 @@ func load_tx_info_from_tx(info *txinfo, tx *transaction.Transaction) (err error)
 
 	for i := 0; i < len(tx.Vout); i++ {
 		info.OutAddress = append(info.OutAddress, tx.Vout[i].Target.(transaction.Txout_to_key).Key.String())
+                
+                amt := "?"
+                
+                if tx.Vout[i].Amount != 0 {
+                    amt = globals.FormatMoney12(tx.Vout[i].Amount)
+                }
+                
+                info.OutAmount = append(info.OutAmount, amt)
 	}
 
 	// if outputs cannot be located, do not panic
@@ -380,6 +399,34 @@ func load_tx_info_from_tx(info *txinfo, tx *transaction.Transaction) (err error)
 	case 4:
 		info.Type = "RingCT/4 Simple Bulletproof"
 	}
+	
+	// add SC info
+	if tx.Verify_SC_Signature() {
+            info.SC_TX_Available = "True" 
+            info.SC_Signer_verified = "True"
+            addr :=  tx.Extra_map[transaction.TX_EXTRA_ADDRESS].(address.Address)
+            info.SC_Signer = addr.String()
+            
+            info.SC_DataSize = int64(len(tx.Extra_map[transaction.TX_EXTRA_SCDATA].([]byte)))
+            
+            
+            
+            err = msgpack.Unmarshal(tx.Extra_map[transaction.TX_EXTRA_SCDATA].([]byte), &info.SC_TX)
+					if err != nil {
+                                            info.SC_TX.SC = fmt.Sprintf("Explorer error while unmarshaling  SC TX err %s", err)
+                                        }
+                                        
+            // check if any DERO value  is attached, if yes, attach it
+	for i := 0; i < len(tx.Vout); i++ {
+            var zero crypto.Key
+		if tx.Vout[i].Amount != 0  && tx.Vout[i].Target.(transaction.Txout_to_key).Key == zero {  
+                    // amount has already been verified as genuine by ringct
+			info.SC_TX.Value = tx.Vout[i].Amount 
+			break;
+		 
+                }
+	  }
+        }
 
 	if !info.In_Pool { // find the age of block and other meta
 		var blinfo block_info
@@ -464,6 +511,12 @@ func load_tx_from_rpc(info *txinfo, txhash string) (err error) {
 
 	info.Ring = tx_result.Txs[0].Ring
 
+	info.SC_Balance = tx_result.Txs[0].SCBalance
+	info.SC_Balance_string = globals.FormatMoney12(tx_result.Txs[0].SCBalance)
+        for k,v := range tx_result.Txs[0].SC_Keys{
+            info.SC_Keys[k]=v
+        }
+	
 	//fmt.Printf("tx_result %+v\n",tx_result.Txs)
 
 	return load_tx_info_from_tx(info, &tx)

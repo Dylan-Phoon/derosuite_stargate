@@ -27,14 +27,15 @@ import "fmt"
 type PRECOMPUTE_TABLE [256]CachedGroupElement
 type SUPER_PRECOMPUTE_TABLE [32]PRECOMPUTE_TABLE
 
+
 type FAST_TABLE [256]PreComputedGroupElement
 
 var x FAST_TABLE
-
-//import "fmt"
-//import "time"
-//import "bytes"
-
+ 
+ //import "fmt"
+ //import "time"
+ //import "bytes"
+ 
 // precompuate table of the form A,2A,4A,8A,16A.....2^255A
 // se gemul8
 // pre compute table size in bytes 256 * 4 field elemets * 5 limbs * 8 bytes
@@ -60,7 +61,7 @@ func GenPrecompute(table *PRECOMPUTE_TABLE, A Key) {
 		tmp.ToBytes(&output)
 
 		tmp.ToPreComputed(&x[i])
-
+ 
 		//fmt.Printf("%d %s\n",i, output)
 
 	}
@@ -88,33 +89,54 @@ func GetBit(x *Key, pos uint) int {
 
 // fastest  Fixed based multiplicatipnn in 7.5 microseconds
 func ScalarMultPrecompute(output *ExtendedGroupElement, scalar *Key, table *PRECOMPUTE_TABLE) {
-	output.Zero() // make it identity
-
-	// extract all bits of scalar
-	for i := uint(0); i < 256; i++ {
-		if GetBit(scalar, i) == 1 { // add precomputed table points
-			var c CompletedGroupElement
-			geAdd(&c, output, &table[i])
-			c.ToExtended(output)
-
-		}
-	}
+        Multprecompscalar(output,scalar,table)
 }
 
 // this generates a very large 32*256 cached elements table roughly 1.28 MB
 func GenSuperPrecompute(stable *SUPER_PRECOMPUTE_TABLE, ptable *PRECOMPUTE_TABLE) {
 
 	var scalar Key
+	
+	var identity_ex,tmp_ex ExtendedGroupElement
+	var identity_cached CachedGroupElement
+	
+	identity_ex.Zero()
+        identity_ex.ToCached(&identity_cached)
 
 	for i := 0; i < 32; i++ {
 		Sc_0(&scalar)
 		for j := 0; j < 256; j++ {
-			scalar[i] = byte(j)
-
-			var result_extended ExtendedGroupElement
-			ScalarMultPrecompute(&result_extended, &scalar, ptable)
-
-			result_extended.ToCached(&stable[i][j])
+                    if i == 0 {
+                        stable[i][j] = ptable[j] // initial is simple copy
+                    }else{
+                        var c CompletedGroupElement
+                        var p ProjectiveGroupElement
+                        
+                        geAdd(&c, &identity_ex,&stable[i-1][j] )
+                        c.ToProjective(&p)
+                        
+                        p.Double(&c)
+	   	c.ToProjective(&p)
+	   	p.Double(&c)
+	   	c.ToProjective(&p)
+	   	p.Double(&c)
+	   	c.ToProjective(&p)
+	   	p.Double(&c)
+	   	c.ToProjective(&p)
+	   	p.Double(&c)
+	   	c.ToProjective(&p)
+	   	p.Double(&c)
+	   	c.ToProjective(&p)
+	   	p.Double(&c)
+	   	c.ToProjective(&p)
+	   	p.Double(&c)
+	   	
+                c.ToExtended(&tmp_ex)
+                tmp_ex.ToCached(&stable[i][j])
+                        
+                         
+                        
+                    }
 		}
 	}
 
@@ -148,6 +170,13 @@ func MulPrecompute(r *PRECOMPUTE_TABLE, s *ExtendedGroupElement) {
 		geAdd(&t, &s2, &r[i])
 		t.ToExtended(&u)
 		u.ToCached(&r[i+2])
+                
+               /* {
+                    var x Key
+                    u.ToBytes(&x)
+                    fmt.Printf("%d %s\n", i,x)
+                    
+                }*/
 	}
 }
 
@@ -222,82 +251,46 @@ func GeMul16(r *CompletedGroupElement, t *ProjectiveGroupElement) {
 	u.Double(r)
 }
 
-func multprecompscalar(output *ExtendedGroupElement, s *Key, table *PRECOMPUTE_TABLE) {
+func Multprecompscalar(output *ExtendedGroupElement, s *Key, table *PRECOMPUTE_TABLE) {
 
 	var c CompletedGroupElement
 	var p ProjectiveGroupElement
 
 	var output_bytes Key
+	_ = output_bytes
 
 	output.Zero()
 	p.Zero()
 
-	for i := uint(255); i >= 0; i-- {
+	for i := 31; i >= 0; i-- {
 		p.Double(&c)
-		c.ToProjective(&p)
-		c.ToExtended(output)
+	   	c.ToProjective(&p)
+	   	p.Double(&c)
+	   	c.ToProjective(&p)
+	   	p.Double(&c)
+	   	c.ToProjective(&p)
+	   	p.Double(&c)
+	   	c.ToProjective(&p)
+	   	p.Double(&c)
+	   	c.ToProjective(&p)
+	   	p.Double(&c)
+	   	c.ToProjective(&p)
+	   	p.Double(&c)
+	   	c.ToProjective(&p)
+	   	p.Double(&c)
+	   	
+                c.ToExtended(output)
 
-		if GetBit(s, i) == 1 {
-			geAdd(&c, output, &table[1])
-			c.ToExtended(output)
-		} else {
-			geAdd(&c, output, &table[0])
-			c.ToExtended(output)
-		}
-
-		output.ToProjective(&p) // for doubling
-
-		output.ToBytes(&output_bytes)
-		//fmt.Printf("%d output %s\n", i,output_bytes)
-
-		if i == 0 {
-			break
-		}
+		
+                geAdd(&c, output, &table[s[i]])
+                c.ToProjective(&p) // for doubling		
 	}
-	/*
-	   	p.Double(&c)
-	   	c.ToProjective(&p)
-	   	p.Double(&c)
-	   	c.ToProjective(&p)
-	   	p.Double(&c)
-	   	c.ToProjective(&p)
-	   	p.Double(&c)
-	   	c.ToProjective(&p)
-	   	p.Double(&c)
-	   	c.ToProjective(&p)
-	   	p.Double(&c)
-	   	c.ToProjective(&p)
-	   	p.Double(&c)
-	   	c.ToProjective(&p)
-	   	p.Double(&c)
-	   	c.ToProjective(&p)
-
-
-	   	c.ToExtended(output)
-
-
-	   	{ // process high nibble first
-	   		//point := ((s1[i]>>4) & 0xf) //| (((s2[i]>>4) & 0xf)<<4)
-
-	   		//fmt.Printf("%d  hpoint %d\n",i, point )
-	   		geAdd(&c, output, &ATABLE[s[i]])
-	   		c.ToExtended(output)
-	   	}
-
-	   /*
-	   	{ // process low nibble now
-	   		point := ((s1[i]) & 0xf) //| (((s2[i]) & 0xf)<<4)
-	   		fmt.Printf("%d  lpoint %d\n",i, point )
-	   		geAdd(&c, output, &ATABLE[point])
-	   		c.ToExtended(output)
-	   	}
-	*/
-	/*	output.ToBytes(&output_bytes)
-
-		fmt.Printf("%d output %s\n", i,output_bytes)
-		output.ToProjective(&p) // for doubling
-	*/
-	//}
+	
+	c.ToExtended(output)
+        //output.ToBytes(&output_bytes)
+        //fmt.Printf("%d output %s\n", i,output_bytes)
+		
+	
 
 }
 

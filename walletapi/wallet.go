@@ -22,13 +22,16 @@ import "sort"
 import "sync"
 import "time"
 import "bytes"
+import "runtime"
 import "strings"
 import "crypto/rand"
 import "encoding/json"
 import "encoding/binary"
 
+
 import "github.com/romana/rlog"
 import "github.com/vmihailenco/msgpack"
+//import "golang.org/x/crypto/salsa20/salsa"
 
 import "github.com/deroproject/derosuite/config"
 import "github.com/deroproject/derosuite/structures"
@@ -78,8 +81,17 @@ type Account struct {
 	Balance_Locked uint64 `json:"balance_locked"` // balance locked
 
 	random_percent uint64 // number of outputs to store within the db, for mixing, default is 10%
+	
+	StartHeight     int64   `json:"startheight"`  // if this is -1, wallet initial height is obtained and set by daemon
+                                                      // if this is positive, it is used as is
 
 	key_image_checklist map[crypto.Key]bool // key images which need to be monitored, this is updated when new funds arrive
+	
+	
+	delay_time  int64 // delay between syncing of wallets
+	booster     time.Time // used to trigger booster
+	best_restore_height int64 // if wallet is restored from this height, the balance will be same
+
 
 	//Outputs_Array []TX_Wallet_Data // all outputs found in the chain belonging to us, as found in chain
 
@@ -287,10 +299,12 @@ func EncryptDecryptPaymentID(derivation crypto.Key, tx_public crypto.Key, input 
 // NOTE: this function only uses view key secret and Spendkey_Public
 // output index is the position of vout within the tx list itself
 func (w *Wallet) Is_Output_Ours(tx_public crypto.Key, output_index uint64, vout_key crypto.Key) bool {
-	derivation := crypto.KeyDerivation(&tx_public, &w.account.Keys.Viewkey_Secret)
+	/*derivation := crypto.KeyDerivation(&tx_public, &w.account.Keys.Viewkey_Secret)
 	derivation_public_key := derivation.KeyDerivation_To_PublicKey(output_index, w.account.Keys.Spendkey_Public)
 
 	return derivation_public_key == vout_key
+	*/
+        return crypto.KeyDerivationandPublicKey(&tx_public,&w.account.Keys.Viewkey_Secret,output_index,w.account.Keys.Spendkey_Public) == vout_key
 }
 
 // only for testing purposes
@@ -356,8 +370,9 @@ func (w *Wallet) Add_Transaction_Record_Funds(txdata *globals.TX_Output_Data) (a
 	for i := range txdata.Key_Images {
 		w.Is_Our_Fund_Consumed(txdata.Key_Images[i], txdata)
 	}
-
-	// confirm that that data belongs to this user
+	
+        
+       // confirm that that data belongs to this user
 	if !w.Is_Output_Ours(txdata.Tx_Public_Key, txdata.Index_within_tx, crypto.Key(txdata.InKey.Destination)) {
 		return // output is not ours
 	}
@@ -440,13 +455,14 @@ func (w *Wallet) Add_Transaction_Record_Funds(txdata *globals.TX_Output_Data) (a
 					err = msgpack.Unmarshal(value_bytes, &tx_wallet_temp)
 					if err == nil {
 						if tx_wallet_temp.TXdata.TXID != txdata.TXID { // transaction mismatch
-							rlog.Warnf("KICD  %s,%s,  \n%+v  \n%+v",txdata.TXID, tx_wallet_temp.TXdata.TXID, txdata,tx_wallet_temp);
+                                                        rlog.Warnf("KICD  %s,%s,  \n%+v  \n%+v",txdata.TXID, tx_wallet_temp.TXdata.TXID, txdata,tx_wallet_temp);
 							return 0, false
 						}
 
+                                                // can this case ever occur
 						if tx_wallet_temp.TXdata.Index_within_tx != txdata.Index_within_tx { // index within tx mismatch
-							rlog.Warnf("KICD2  %s,%s,  \n%+v  \n%+v",txdata.TXID, tx_wallet_temp.TXdata.TXID, txdata,tx_wallet_temp);
-							return 0, false
+                                                     rlog.Warnf("KICD2  %s,%s,  \n%+v  \n%+v",txdata.TXID, tx_wallet_temp.TXdata.TXID, txdata,tx_wallet_temp);
+                                                    return 0, false
 						}
 					}
 				}
@@ -495,6 +511,7 @@ func (w *Wallet) Is_Our_Fund_Consumed(key_image crypto.Key, txdata *globals.TX_O
 	if !w.check_key_exists(BLOCKCHAIN_UNIVERSE, []byte(KEYIMAGE_BUCKET), key_image[:]) {
 		return 0, false
 	}
+
 	defer w.Save_Wallet()
 	w.Lock()
 	defer w.Unlock()
@@ -573,7 +590,9 @@ func (w *Wallet) Get_Balance_Rescan() (mature_balance uint64, locked_balance uin
 	defer w.RUnlock()
 
 	index_list := w.load_all_values_from_bucket(BLOCKCHAIN_UNIVERSE, []byte(FUNDS_AVAILABLE))
-
+        
+        best_restore_height := int64(5000000000)
+        
 	//fmt.Printf("found %d elements in bucket \n", len(index_list))
 	for i := range index_list { // load index
 		index := binary.BigEndian.Uint64(index_list[i])
@@ -593,7 +612,8 @@ func (w *Wallet) Get_Balance_Rescan() (mature_balance uint64, locked_balance uin
 		// check whether the height and block matches with what is stored at this point in time
 		local_hash, err := w.load_key_value(BLOCKCHAIN_UNIVERSE, []byte(HEIGHT_TO_BLOCK_BUCKET), itob(uint64(tx_wallet.TXdata.TopoHeight)))
 		if err != nil {
-			continue
+                        //rlog.Warnf("err %s %d \n", err, tx_wallet.TXdata.TopoHeight);
+			//continue
 		}
 
 		// input disappeared due to chain soft fork
@@ -613,6 +633,10 @@ func (w *Wallet) Get_Balance_Rescan() (mature_balance uint64, locked_balance uin
 
 			continue // skip this input
 		}
+		
+		if best_restore_height > tx_wallet.TXdata.TopoHeight {
+                    best_restore_height =  tx_wallet.TXdata.TopoHeight
+                }
 
 		if inputmaturity.Is_Input_Mature(w.account.Height,
 			tx_wallet.TXdata.Height,
@@ -624,6 +648,10 @@ func (w *Wallet) Get_Balance_Rescan() (mature_balance uint64, locked_balance uin
 		}
 
 	}
+	if best_restore_height >= 5000000000 {
+            best_restore_height = -1
+        }
+        w.account.best_restore_height = best_restore_height // lowest topoheight input available is the topoheight wallet should be restored from
 
 	w.account.Balance_Mature = mature_balance
 	w.account.Balance_Locked = locked_balance
@@ -637,7 +665,12 @@ func (w *Wallet) Get_Balance_Rescan() (mature_balance uint64, locked_balance uin
 
 //
 func (w *Wallet) Get_Balance() (mature_balance uint64, locked_balance uint64) {
+    
+        if w.account.best_restore_height == 0 {
+            return w.Get_Balance_Rescan() // call heavy function
+        }
 	w.RLock()
+        
 	if !w.Is_Balance_Modified() {
 		w.RUnlock()
 		return w.account.Balance_Mature, w.account.Balance_Locked
@@ -660,6 +693,9 @@ func (w *Wallet) Store_Height_Mapping(txdata *globals.TX_Output_Data) {
 
 	w.account.Height = txdata.Height         // increase wallet height
 	w.account.TopoHeight = txdata.TopoHeight // increase wallet topo height
+	
+
+
 	if old_block_cache != txdata.BLID {      // make wallet scanning as fast as possible
 		//fmt.Printf("gStoring height to block %d %s t %s\n", txdata.Height, txdata.BLID, txdata.TXID)
 		old_block, err := w.load_key_value(BLOCKCHAIN_UNIVERSE, []byte(HEIGHT_TO_BLOCK_BUCKET), itob(uint64(txdata.TopoHeight)))
@@ -669,7 +705,13 @@ func (w *Wallet) Store_Height_Mapping(txdata *globals.TX_Output_Data) {
 
 			// fmt.Printf("Storing height to block %d %s\n", txdata.Height, txdata.BLID)
 		}
+                        if runtime.GOOS == "js" && txdata.TopoHeight > 500 { // continue delete and flush out chain data
+                            w.delete_key(BLOCKCHAIN_UNIVERSE, []byte(HEIGHT_TO_BLOCK_BUCKET), itob(uint64(txdata.TopoHeight-499)))
+                        }
 	}
+
+        
+
 
 }
 
@@ -688,7 +730,63 @@ func (w *Wallet) Add_Possible_Ring_Member(txdata *globals.TX_Output_Data) {
 	defer w.Unlock()
 
 	w.account.Index_Global = txdata.Index_Global // increment out pointer
+	
+	// this should be removed when the desktop wallets need to be smaller in size
+	if runtime.GOOS == "js" { 
+	// new account definitely needs ring members
+	if w.account.StartHeight >= 0 && w.account.TopoHeight >= w.account.StartHeight && (w.account.TopoHeight - w.account.StartHeight) > 3000 { 
+	/*if runtime.GOOS != "js" {
 
+	// first we must filter out ring members deterministically based on secret spend key 
+        var out [32]byte 
+        var in [16]byte
+        var key [32]byte
+        
+        copy(key[:],w.account.Keys.Spendkey_Secret[:])
+        
+        binary.BigEndian.PutUint64(in[:], uint64(txdata.Index_Global))
+        
+        salsa.HSalsa20(&out,&in,&key,&in)
+        
+        deterministic_value := binary.BigEndian.Uint64(out[:])
+        
+        // this number increase cost while building the transaction
+        if deterministic_value % 800  != 0  { // keep 1 out of every 800 ring members
+         return   
+        }
+        }else*/    {
+        
+        // Encrypt encrypts the 8 byte buffer src using the key in t and stores the
+// result in dst. Note that for amounts of data larger than a block, it is not
+// safe to just call Encrypt on successive blocks; instead, use an encryption
+// mode like CBC (see crypto/cipher/cbc.go).
+       // NOTE : we are using only 16 bytes, it's slightly modified TEA
+       // just in case an attack can occur, still he will have to bruter force 2^128 combinations
+	e := binary.BigEndian
+	v0, v1 := uint32(txdata.Index_Global), uint32(0)
+	k0, k1, k2, k3 := e.Uint32(w.account.Keys.Spendkey_Secret[0:]), e.Uint32(w.account.Keys.Spendkey_Secret[4:]), e.Uint32(w.account.Keys.Spendkey_Secret[8:]), e.Uint32(w.account.Keys.Spendkey_Secret[12:])
+
+	sum := uint32(0)
+	delta := uint32(0x9e3779b9)
+
+	for i := 0; i < 64/2; i++ {
+		sum += delta
+		v0 += ((v1 << 4) + k0) ^ (v1 + sum) ^ ((v1 >> 5) + k1)
+		v1 += ((v0 << 4) + k2) ^ (v0 + sum) ^ ((v0 >> 5) + k3)
+                v0 ^= v1
+	}
+
+	if v0 % 800  != 0  { // keep 1 out of every 800 ring members
+         return   
+        }
+
+}
+        }
+        }
+        
+       // rlog.Warnf("Selecting ring member %d", txdata.Index_Global)
+    
+        
 	var r Ring_Member
 	r.InKey = txdata.InKey
 	r.Height = txdata.Height
@@ -982,9 +1080,11 @@ func (w *Wallet) Clean() {
 	w.delete_bucket(BLOCKCHAIN_UNIVERSE, []byte(FUNDS_SPENT_WHERE))
 	w.delete_bucket(BLOCKCHAIN_UNIVERSE, []byte(FUNDS_BUCKET_OUTGOING))
 
-//	w.delete_bucket(BLOCKCHAIN_UNIVERSE, []byte(RING_BUCKET))
+if runtime.GOOS == "js" {        
+	w.delete_bucket(BLOCKCHAIN_UNIVERSE, []byte(RING_BUCKET))  //workaround boltdb freelist issue
+}
 	w.delete_bucket(BLOCKCHAIN_UNIVERSE, []byte(KEYIMAGE_BUCKET))
-	w.delete_bucket(BLOCKCHAIN_UNIVERSE, []byte(HEIGHT_TO_BLOCK_BUCKET))
+	w.delete_bucket(BLOCKCHAIN_UNIVERSE, []byte(HEIGHT_TO_BLOCK_BUCKET)) //workaround boltdb freelist issue
 
 }
 
@@ -1022,6 +1122,14 @@ func (w *Wallet) Get_Daemon_Height() uint64 {
 
 	return w.Daemon_Height
 }
+
+// return topoheight of daemon
+func (w *Wallet) Get_Daemon_TopoHeight() uint64 {
+	w.RLock()
+	defer w.RUnlock()
+	return uint64(w.Daemon_TopoHeight)
+}
+
 
 // return index position
 func (w *Wallet) Get_Index_Global() uint64 {
@@ -1182,4 +1290,31 @@ func (w *Wallet) GetTXOutDetails(txhash crypto.Hash) (details structures.Outgoin
 	}
 
 	return
+}
+
+
+func (w *Wallet) GetMinimumTopoHeight() int64 {
+    return w.account.best_restore_height
+} 
+func (w *Wallet) GetInitialHeight() int64 {
+    return w.account.StartHeight
+}
+
+func (w *Wallet) SetInitialHeight(i int64) int64 {
+    w.account.StartHeight = i
+    return w.account.StartHeight
+}
+
+
+// setting an illegal time such as 0 returns current time
+func (w *Wallet) SetDelaySync(time_seconds int64) int64 {
+    
+    if time_seconds > 5  && time_seconds < 300 { // make sure limit is sane
+        w.account.delay_time = time_seconds 
+    }
+    
+    if w.account.delay_time < 5 {  // make sure time is sane
+        w.account.delay_time = 5
+    }  
+    return w.account.delay_time
 }

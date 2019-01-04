@@ -94,7 +94,7 @@ func (h Transfer_Handler) ServeJSONRPC(c context.Context, params *fastjson.RawMe
 
 		// TODO
 	}
-	tx, inputs, input_sum, change, err := h.r.w.Transfer(address_list, amount_list, unlock_time, payment_id, fees_per_kb, p.Mixin)
+	tx, inputs, input_sum, change, err := h.r.w.Transfer(address_list, amount_list, unlock_time, payment_id, fees_per_kb, p.Mixin,nil)
 	_ = inputs
 	if err != nil {
 		rlog.Warnf("Error while building Transaction err %s\n", err)

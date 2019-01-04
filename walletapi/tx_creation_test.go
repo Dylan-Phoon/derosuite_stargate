@@ -130,7 +130,7 @@ func Test_Creation_TX(t *testing.T) {
 			bulletproof = true
 		}
 
-		tx := w.Create_TX_v2(ins, outs, 0, 0, payment_id, bulletproof)
+		tx := w.Create_TX_v2(ins, outs, 0, 0, payment_id, bulletproof,nil)
 
 		if !tx.RctSignature.Verify() {
 			t.Fatalf("TX ring signature verification failed")
@@ -262,7 +262,7 @@ func Test_Creation_TX_Size(t *testing.T) {
 
 			bulletproof := true
 
-			tx := w.Create_TX_v2(ins, outs, 0, 0, payment_id, bulletproof)
+			tx := w.Create_TX_v2(ins, outs, 0, 0, payment_id, bulletproof,nil)
 
 			if !tx.RctSignature.Verify() {
 				t.Fatalf("TX ring signature verification failed")
@@ -452,7 +452,7 @@ func benchmark_TX_Verification(b *testing.B, num_inputs uint32, num_outputs uint
 
 	bulletproof := true
 
-	tx = w.Create_TX_v2(ins, outs, 0, 0, payment_id, bulletproof)
+	tx = w.Create_TX_v2(ins, outs, 0, 0, payment_id, bulletproof,nil)
 
 	return tx
 
@@ -535,3 +535,154 @@ func Benchmark_TX_Verification_inputs_10_outputs_2_mixin_8(b *testing.B){
 	benchmark_TX_Verification(b,10,2,8)
 }
 */
+
+
+
+// this will test that the keys are placed properly and thus can be decoded by recievers
+func Test_Creation_SCTX(t *testing.T) {
+
+	temp_db := filepath.Join(os.TempDir(), "dero_temporary_test_wallet.db")
+
+	os.Remove(temp_db)
+
+	w, err := Create_Encrypted_Wallet(temp_db, "QWER", *crypto.RandomScalar())
+	if err != nil {
+		t.Fatalf("Cannot create encrypted wallet, err %s", err)
+	}
+
+	defer os.Remove(temp_db) // cleanup after test
+	//sender,_ := Generate_Keys_From_Random() // we have a single sender
+
+	var receivers []*Account
+
+	randomBytes := make([]byte, 4)
+
+	for loop := 0; loop < 1; loop++ { // run the test randomly 200 times
+		rand.Read(randomBytes)
+		random_inputs := 1 + (binary.LittleEndian.Uint32(randomBytes) % 20) //minimum 1 input is necessary
+		rand.Read(randomBytes)
+		random_outputs := 1 + (binary.LittleEndian.Uint32(randomBytes) % 20) //minimum 1 output is necessary
+
+		if loop == 0 {
+			random_inputs = 10
+		}
+
+		if loop == 1 {
+			random_outputs = 200 // randomly place 200 outputs in single tx
+		}
+
+		if loop == 2 {
+			random_inputs = 500
+			random_outputs = 2
+		}
+		
+		random_inputs = 5
+                random_outputs = 1
+
+
+		txw := TX_Wallet_Data{WAmount: 4000000000000}
+		txw.TXdata.Index_Global = 739
+		txw.TXdata.Height = 730
+		txw.WKey.Destination = crypto.HexToKey("dbdfd2a3e9da6911b0a3e37e8e448f2de2477f81760585c2f197736bac127e0f")
+		txw.WKey.Mask = crypto.HexToKey("01e4e85ab0b5e30dd86b5356f0f6b4177738b9e6b32041c4e4781a2f26083101")
+		txw.WKimage = crypto.HexToKey("d8fb3b4260aea6582400a5f48244ff3f7c4dc36420698e3decc5d28ba04733c2")
+		txw.TXdata.InKey.Destination = crypto.HexToKey("ed0da9e74d240088a07909ea354b8d140b753642e25495e0931b4623b25ff523")
+		txw.TXdata.InKey.Mask = crypto.HexToKey("dbddab6c6b3063074e7cfd1a7f83f184ad78e92c8ff25118c0ed4edc77015948")
+
+		var outs []ringct.Output_info
+		for i := uint32(0); i < random_outputs; i++ {
+			r, _ := Generate_Keys_From_Random()
+			receivers = append(receivers, r)
+
+			out := ringct.Output_info{Public_Spend_Key: receivers[i].GetAddress().SpendKey,
+				Public_View_Key: receivers[i].GetAddress().ViewKey}
+
+			if i == 0 { // balance the outputs
+				out.Amount = uint64(random_inputs) * txw.WAmount
+			}
+			outs = append(outs, out) // fill outs with random address
+		}
+
+		var ins []ringct.Input_info
+		for i := uint32(0); i < random_inputs; i++ {
+
+			ins = append(ins, ringct.Input_info{Amount: txw.WAmount, Key_image: crypto.Hash(txw.WKimage), Sk: txw.WKey, Index_Global: txw.TXdata.Index_Global})
+
+			//now we must the ring members
+			ins[i].Ring_Members = append(ins[i].Ring_Members, txw.TXdata.Index_Global)
+			ins[i].Pubs = append(ins[i].Pubs, txw.TXdata.InKey)
+
+			// lets add 5 ring members randomly
+			for j := uint64(0); j < 5; j++ {
+				ins[i].Ring_Members = append(ins[i].Ring_Members, txw.TXdata.Index_Global+j+1)
+				ins[i].Pubs = append(ins[i].Pubs, ringct.CtKey{Destination: *crypto.RandomScalar(), Mask: *crypto.RandomScalar()})
+			}
+		}
+
+		// 739th main net consumed output
+		var payment_id []byte
+
+		if loop%2 == 0 {
+			payment_id = make([]byte, 32, 32) // test 32 byte payment id
+		} else {
+			payment_id = make([]byte, 8, 8) // make encrypted payment ID
+		}
+
+		if loop%3 == 0 {
+			payment_id = make([]byte, 0, 0) // test with out payment id
+		}
+
+		bulletproof := true
+		
+
+		var sctx transaction.SC_Transaction
+		
+		tx := w.Create_TX_v2(ins, outs, 0, 0, payment_id, bulletproof,&sctx)
+
+                if !tx.Verify_SC_Signature() {
+			t.Fatalf("TX SC  signature verification failed")
+		}
+		
+		if !tx.RctSignature.Verify() {
+			t.Fatalf("TX ring signature verification failed")
+		}
+
+		// now check whether the outputs can be verified successfuly after serdes
+		var tx2 transaction.Transaction
+		tx2.DeserializeHeader(tx.Serialize())
+		tx2.Parse_Extra()
+
+		public_key := tx2.Extra_map[transaction.TX_PUBLIC_KEY].(crypto.Key)
+
+		if len(payment_id) == 8 { // test whether payment ID was encrypted and decrypted successfully
+			epayid := tx.PaymentID_map[transaction.TX_EXTRA_NONCE_ENCRYPTED_PAYMENT_ID].([]byte)
+
+			derivation := crypto.KeyDerivation(&public_key, &receivers[0].Keys.Viewkey_Secret)
+			payid := EncryptDecryptPaymentID(derivation, public_key, epayid)
+
+			t.Logf("epay id %x  decrypted %x", epayid, payid)
+
+			if !bytes.Equal(payment_id, payid) {
+				t.Fatalf("8 byte encrypted payment ID missing failed")
+			}
+
+		}
+
+		if len(payment_id) == 32 { // test full 32 byte payment id
+			if !bytes.Equal(payment_id, tx.PaymentID_map[transaction.TX_EXTRA_NONCE_PAYMENT_ID].([]byte)) {
+				t.Fatalf("32 byte payment ID missing, failed")
+			}
+		}
+		for output_index := range outs {
+
+			tx_out_to_key := tx2.Vout[output_index].Target.(transaction.Txout_to_key)
+			if !receivers[output_index].Is_Output_Ours(public_key, uint64(output_index), tx_out_to_key.Key) {
+				t.Fatalf("Output mismatch index %d", output_index)
+			}
+
+		}
+		t.Logf("inputs %5d\toutputs %5d\t tx size %4d KB %+v", random_inputs, random_outputs, len(tx.Serialize())/1024, bulletproof)
+	}
+
+}
+

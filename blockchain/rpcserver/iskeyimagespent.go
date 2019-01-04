@@ -16,11 +16,16 @@
 
 package rpcserver
 
+import "io"
+import "fmt"
 import "net/http"
 import "strings"
+import "context"
 
 //import "encoding/hex"
 import "encoding/json"
+import "github.com/intel-go/fastjson"
+import "github.com/osamingo/jsonrpc"
 
 import "github.com/deroproject/derosuite/crypto"
 import "github.com/deroproject/derosuite/structures"
@@ -35,15 +40,16 @@ import "github.com/deroproject/derosuite/structures"
 
 type IsKeyImageSpent_Handler struct{}
 
-func iskeyimagespent(rw http.ResponseWriter, req *http.Request) {
-	decoder := json.NewDecoder(req.Body)
+func (ki IsKeyImageSpent_Handler) ServeJSONRPC(c context.Context, params *fastjson.RawMessage) (interface{}, *jsonrpc.Error) {
+
 	var p structures.Is_Key_Image_Spent_Params
 	var result structures.Is_Key_Image_Spent_Result
-	err := decoder.Decode(&p)
-	if err != nil {
-		panic(err)
+
+	if err := jsonrpc.Unmarshal(params, &p); err != nil {
+		return result, nil
+		fmt.Printf("Key_images handler json unmarshal err %s \n", err)
+		return nil, err
 	}
-	defer req.Body.Close()
 
 	for i := range p.Key_images {
 		hash := crypto.HashHexToHash(strings.TrimSpace(p.Key_images[i]))
@@ -63,6 +69,63 @@ func iskeyimagespent(rw http.ResponseWriter, req *http.Request) {
 		result.Spent_Status = append(result.Spent_Status, 0) // 0 mark means unspent
 	}
 
+	result.Status = "OK"
+
+	return result, nil
+}
+
+func iskeyimagespent(rw http.ResponseWriter, req *http.Request) {
+
+	rw.Header().Set("content-type", "application/json")
+	decoder := json.NewDecoder(req.Body)
+	var p structures.Is_Key_Image_Spent_Params
+	var result structures.Is_Key_Image_Spent_Result
+
+	// if it's a request with keyimage in url, process and return here
+	q := req.URL.Query()
+	if q["ki"] != nil && q["ki"][0] != "" {
+		hash := crypto.HashHexToHash(strings.TrimSpace(q["ki"][0]))
+
+		// check in blockchain
+		if _, ok := chain.Read_KeyImage_Status(nil, hash); ok {
+			result.Spent_Status = append(result.Spent_Status, 1) // 1 mark means spent  in blockchain
+
+		} else if chain.Mempool.Mempool_Keyimage_Spent(hash) {
+			result.Spent_Status = append(result.Spent_Status, 2) // 2 mark means spent  in pool
+
+		} else {
+
+			result.Spent_Status = append(result.Spent_Status, 0) // 0 mark means unspent
+		}
+
+	} else {
+
+		err := decoder.Decode(&p)
+		if err != nil {
+			if err != io.EOF {
+				panic(err)
+			}
+		}
+		defer req.Body.Close()
+
+		for i := range p.Key_images {
+			hash := crypto.HashHexToHash(strings.TrimSpace(p.Key_images[i]))
+
+			// check in blockchain
+			if _, ok := chain.Read_KeyImage_Status(nil, hash); ok {
+				result.Spent_Status = append(result.Spent_Status, 1) // 1 mark means spent  in blockchain
+				continue
+			}
+
+			// check in pool
+			if chain.Mempool.Mempool_Keyimage_Spent(hash) {
+				result.Spent_Status = append(result.Spent_Status, 2) // 2 mark means spent  in pool
+				continue
+			}
+
+			result.Spent_Status = append(result.Spent_Status, 0) // 0 mark means unspent
+		}
+	}
 	result.Status = "OK"
 	//logger.Debugf("Request %+v", p)
 

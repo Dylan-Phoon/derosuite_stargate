@@ -315,8 +315,7 @@ func main() {
 				continue
 			}
 		} else if err == io.EOF {
-//			break
-			time.Sleep(time.Second)
+			break
 		}
 
 		// pass command to suitable handler

@@ -53,7 +53,7 @@ var mainnet_hard_forks = []Hard_fork{
 // current testnet_hard_forks
 var testnet_hard_forks = []Hard_fork{
 	{1, 0, 0, 0, 0, true},    // version 1 hard fork where genesis block landed
-	{2, 1984, 0, 0, 0, true}, // version 2 hard fork where we started , it's mandatory
+	{4, 1, 0, 0, 0, true}, // version 4 hard fork where we started , it's mandatory
 }
 
 // current simulation_hard_forks

@@ -42,13 +42,13 @@ for PLATFORM in $PLATFORMS; do
   GOARCH=${PLATFORM#*/}
   OUTPUT_DIR="${ABSDIR}/build/dero_${GOOS}_${GOARCH}"
   BIN_FILENAME="${OUTPUT}-${GOOS}-${GOARCH}"
-echo  mkdir -p $OUTPUT_DIR
+  echo  mkdir -p $OUTPUT_DIR
   if [[ "${GOOS}" == "windows" ]]; then BIN_FILENAME="${BIN_FILENAME}.exe"; fi
   CMD="GOOS=${GOOS} GOARCH=${GOARCH} go build -o $OUTPUT_DIR/${BIN_FILENAME} $package"
   echo "${CMD}"
   eval $CMD || FAILURES="${FAILURES} ${PLATFORM}"
-
-  # build docker image for linux amd64 competely static  
+  
+# build docker image for linux amd64 competely static  
   if [[ "${GOOS}" == "linux" && "${GOARCH}" == "amd64" && "${OUTPUT}" != "explorer" ]]; then
     BIN_FILENAME="docker-${OUTPUT}-${GOOS}-${GOARCH}"
     CMD="GOOS=${GOOS} GOARCH=${GOARCH} CGO_ENABLED=0 go build -o $OUTPUT_DIR/${BIN_FILENAME} $package"
@@ -56,8 +56,9 @@ echo  mkdir -p $OUTPUT_DIR
     eval $CMD || FAILURES="${FAILURES} ${PLATFORM}"
   fi
   
-
 done
+
+
 
 # ARM64 builds only for linux
 if [[ $PLATFORMS_ARM == *"linux"* ]]; then 

@@ -40,7 +40,7 @@ import "github.com/deroproject/derosuite/blockchain/inputmaturity"
 
 
 // send amount to specific addresses
-func (w *Wallet) Transfer(addr []address.Address, amount []uint64, unlock_time uint64, payment_id_hex string, fees_per_kb uint64, mixin uint64) (tx *transaction.Transaction, inputs_selected []uint64, inputs_sum uint64, change_amount uint64, err error) {
+func (w *Wallet) Transfer(addr []address.Address, amount []uint64, unlock_time uint64, payment_id_hex string, fees_per_kb uint64, mixin uint64, sctx *transaction.SC_Transaction) (tx *transaction.Transaction, inputs_selected []uint64, inputs_sum uint64, change_amount uint64, err error) {
 
     
         var  transfer_details structures.Outgoing_Transfer_Details
@@ -52,7 +52,8 @@ func (w *Wallet) Transfer(addr []address.Address, amount []uint64, unlock_time u
 	if mixin < 5 { // enforce minimum mixin
 		mixin = 5
 	}
-
+	
+	
 	// if wallet is online,take the fees from the network itself
 	// otherwise use whatever user has provided
 	//if w.GetMode()  {
@@ -70,7 +71,7 @@ func (w *Wallet) Transfer(addr []address.Address, amount []uint64, unlock_time u
 		return
 	}
 
-	if len(addr) < 1 {
+	if sctx ==  nil && len(addr) < 0 {
 		err = fmt.Errorf("Destination address missing")
 		return
 	}
@@ -111,6 +112,19 @@ func (w *Wallet) Transfer(addr []address.Address, amount []uint64, unlock_time u
 			payment_id = addr[i].PaymentID
 		}
 	}
+	
+	// reject valid DERO address
+	for i := range addr {
+		if !addr[i].IsDERONetwork() {
+			err = fmt.Errorf("address provided is not a valid DERO network address")
+                        return
+		}
+		if addr[i].IsMainnet()  != globals.IsMainnet() {
+                        err = fmt.Errorf("address provided has invalid DERO network mainnet/testnet")
+                        return
+                }
+	}
+	
 
 	fees := uint64(0) // start with zero fees
 	expected_fee := uint64(0)
@@ -315,7 +329,7 @@ func (w *Wallet) Transfer(addr []address.Address, amount []uint64, unlock_time u
             }
 
 		// outputs = append(outputs, change)
-		tx = w.Create_TX_v2(inputs, outputs, fees, unlock_time, payment_id, true)
+		tx = w.Create_TX_v2(inputs, outputs, fees, unlock_time, payment_id, true, sctx)
 
 		tx_size := uint64(len(tx.Serialize()))
 		size_in_kb := tx_size / 1024
@@ -589,7 +603,8 @@ func (w *Wallet) Transfer_Everything(addr address.Address, payment_id_hex string
 		outputs = append(outputs, output)
 
 		// outputs = append(outputs, change)
-		tx = w.Create_TX_v2(inputs, outputs, fees, unlock_time, payment_id, true)
+                // transfer everything cannot be used with SC transaction
+		tx = w.Create_TX_v2(inputs, outputs, fees, unlock_time, payment_id, true,nil)
 
 		tx_size := uint64(len(tx.Serialize()))
 		size_in_kb := tx_size / 1024
@@ -758,7 +773,7 @@ func (w *Wallet) load_funds_data(index uint64, bucket string) (tx_wallet *TX_Wal
 }
 
 // this will create ringct simple 2 transaction to transfer x amount
-func (w *Wallet) Create_TX_v2(inputs []ringct.Input_info, outputs []ringct.Output_info, fees uint64, unlock_time uint64, payment_id []byte, bulletproof bool) (txout *transaction.Transaction) {
+func (w *Wallet) Create_TX_v2(inputs []ringct.Input_info, outputs []ringct.Output_info, fees uint64, unlock_time uint64, payment_id []byte, bulletproof bool, sctx *transaction.SC_Transaction) (txout *transaction.Transaction) {
 	var tx transaction.Transaction
 	tx.Version = 2
 	tx.Unlock_Time = unlock_time // for the first input
@@ -809,6 +824,30 @@ func (w *Wallet) Create_TX_v2(inputs []ringct.Input_info, outputs []ringct.Outpu
 	if len(payment_id) == 32 {
 		tx.PaymentID_map[transaction.TX_EXTRA_NONCE_PAYMENT_ID] = payment_id
 	}
+	
+	// build up SC part if required
+	if sctx != nil {
+            // msgpack sctx 
+            
+            serialized, err := msgpack.Marshal(&sctx)
+            
+            if err != nil {
+                rlog.Warnf("Error marshal SC transactions %+v", err)
+                
+            }
+            
+            tx.Extra_map[transaction.TX_EXTRA_SCDATA] = serialized 
+            
+            // use the first key image as mechanism to stop replay attacks of all forms
+            msg_hash := crypto.Key(crypto.Keccak256( tx.Extra_map[transaction.TX_EXTRA_SCDATA].([]byte),inputs[0].Key_image[:]))
+            
+            var sig crypto.Signature 
+            
+            crypto.Signature_Generate(msg_hash,w.account.Keys.Spendkey_Public,w.account.Keys.Spendkey_Secret, &sig)
+            tx.Extra_map[transaction.TX_EXTRA_SIG] = sig 
+            tx.Extra_map[transaction.TX_EXTRA_ADDRESS] = w.GetAddress() 
+        }
+	
 
 	tx.Extra = tx.Serialize_Extra() // serialize the extra
 
@@ -830,8 +869,18 @@ func (w *Wallet) Create_TX_v2(inputs []ringct.Input_info, outputs []ringct.Outpu
 		index_within_tx := i
 		ehphermal_public_key := derivation.KeyDerivation_To_PublicKey(uint64(index_within_tx), outputs[i].Public_Spend_Key)
 
-		// added the amount and key in vout
+		
+                
+                    // added the amount and key in vout
+                // in case of  SC transactions send output to vaccum
+                var zero crypto.Key 
+                if outputs[i].Public_View_Key == zero && outputs[i].Public_Spend_Key == zero {
+                
+		tx.Vout = append(tx.Vout, transaction.Tx_out{Amount: outputs[i].Amount, Target: transaction.Txout_to_key{Key: zero}})
+                }else{ // non-sc tx , output amount must be zero
+                    
 		tx.Vout = append(tx.Vout, transaction.Tx_out{Amount: 0, Target: transaction.Txout_to_key{Key: ehphermal_public_key}})
+                }
 
 		// setup key so as output amount can be encrypted, this will be passed later on to ringct package to encrypt amount
 		outputs[i].Scalar_Key = *(derivation.KeyDerivationToScalar(uint64(index_within_tx)))
@@ -856,4 +905,32 @@ func (w *Wallet) Create_TX_v2(inputs []ringct.Input_info, outputs []ringct.Outpu
 	w.store_key_value(BLOCKCHAIN_UNIVERSE, []byte(SECRET_KEY_BUCKET), txhash[:], tx_secret_key[:])
 
 	return &tx
+}
+
+
+// this will give a random blob
+// just in case we allow to pay via blobs ( this protects the address )
+func (w *Wallet) GetRandomBlob( input_address string) string{
+    
+    if input_address == "" { // use wallet address
+        input_address = w.account.GetAddress().String()
+    }
+    
+    addr,err := address.NewAddress(input_address)
+    
+    if err == nil {
+     rlog.Warnf("Invalid input address while generating blob %s err %s", input_address, err )   
+     return ""
+    }
+    
+    tx_secret_key, tx_public_key := crypto.NewKeyPair() // create new tx key pair
+    derivation := crypto.KeyDerivation(&addr.ViewKey, tx_secret_key) // keyderivation using wallet address view key
+    	index_within_tx := uint64(0)
+
+	// this becomes the key within Vout
+    ehphermal_public_key := derivation.KeyDerivation_To_PublicKey(index_within_tx, addr.SpendKey)
+    
+    return fmt.Sprintf("%s%s", tx_public_key,ehphermal_public_key)
+        
+        
 }

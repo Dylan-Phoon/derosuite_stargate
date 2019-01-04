@@ -23,6 +23,7 @@
 package structures
 
 import "github.com/deroproject/derosuite/globals"
+import "github.com/deroproject/derosuite/dvm"
 
 //import "github.com/deroproject/derosuite/structures"
 
@@ -149,6 +150,7 @@ type (
 type (
 	GetTransaction_Params struct {
 		Tx_Hashes []string `json:"txs_hashes"`
+		SC_Keys   []string `json:"sc_keys"`
 		Decode    uint64   `json:"decode_as_json,omitempty"` // Monero Daemon breaks if this sent
 	} // no params
 	GetTransaction_Result struct {
@@ -170,6 +172,10 @@ type (
 		ValidBlock     string                     `json:"valid_block"`   // TX is valid in this block
 		InvalidBlock   []string                   `json:"invalid_block"` // TX is invalid in this block,  0 or more
 		Ring           [][]globals.TX_Output_Data `json:"ring"`
+		SC_Keys        map[string]string          `json:"sc_keys"`
+		SCBalance        uint64                   `json:"sc_balance"`
+		SC             dvm.SmartContract          `json:"sc"`
+		SCRAW          string                     `json:"sc_raw"`
 	}
 )
 

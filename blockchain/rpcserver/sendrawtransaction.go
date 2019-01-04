@@ -16,6 +16,7 @@
 
 package rpcserver
 
+import "io"
 import "fmt"
 import "net/http"
 import "encoding/hex"
@@ -48,8 +49,10 @@ func SendRawTransaction_Handler(rw http.ResponseWriter, req *http.Request) {
 	}()
 	err := decoder.Decode(&p)
 	if err != nil {
+                if err != io.EOF {
 		logger.Warnf("err while decoding incoming sendrawtransaaction json err: %s", err)
 		return
+                }
 	}
 	defer req.Body.Close()
 

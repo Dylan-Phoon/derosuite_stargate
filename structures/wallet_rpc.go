@@ -22,6 +22,8 @@
 
 package structures
 
+import "github.com/deroproject/derosuite/transaction"
+
 type (
 	GetBalance_Params struct{} // no params
 	GetBalance_Result struct {
@@ -60,6 +62,8 @@ type (
 		Priority     uint64        `json:"priority"`
 		Do_not_relay bool          `json:"do_not_relay"`
 		Get_tx_hex   bool          `json:"get_tx_hex"`
+		
+		SCTX         transaction.SC_Transaction   `json:"sc_tx"`
 	} // no params
 	Transfer_Result struct {
 		Fee     uint64 `json:"fee"`

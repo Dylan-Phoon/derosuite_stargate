@@ -116,7 +116,7 @@ func (w *Wallet) IsDaemonOnline() (err error) {
 	// if daemon connection breaks or comes live again
 	if err == nil {
 		if !Connected {
-			rlog.Infof("Connection to RPC server successful %s", buildurl(w.Daemon_Endpoint))
+			rlog.Debugf("Connection to RPC server successful %s", buildurl(w.Daemon_Endpoint))
 			Connected = true
 		}
 	} else {
@@ -128,6 +128,8 @@ func (w *Wallet) IsDaemonOnline() (err error) {
 
 		}
 		Connected = false
+		w.Daemon_Height = 0
+                w.Daemon_TopoHeight = 0
 
 		return
 	}
@@ -136,14 +138,21 @@ func (w *Wallet) IsDaemonOnline() (err error) {
 	if err != nil {
 		rlog.Errorf("Daemon getinfo RPC parsing error err: %s\n", err)
 		Connected = false
+		w.Daemon_Height = 0
+                w.Daemon_TopoHeight = 0
 		return
 	}
+	
+	rlog.Infof("info from rpcinfo %+v\n", info)
 	// detect whether both are in different modes
 	//  daemon is in testnet and wallet in mainnet or
 	// daemon
 	if info.Testnet != !globals.IsMainnet() {
 		err = fmt.Errorf("Mainnet/TestNet  is different between wallet/daemon.Please run daemon/wallet without --testnet")
 		rlog.Criticalf("%s", err)
+                
+                w.Daemon_Height = 0
+                w.Daemon_TopoHeight = 0
 		return
 	}
 
@@ -153,6 +162,15 @@ func (w *Wallet) IsDaemonOnline() (err error) {
 	if info.Height >= 0 {
 		w.Daemon_Height = uint64(info.Height)
 		w.Daemon_TopoHeight = info.TopoHeight
+		
+		if w.account.StartHeight == -1  && info.TopoHeight > 1000000{
+                    w.account.StartHeight = info.TopoHeight - 1000                    
+                }
+                
+                // activate booster if  we are lagging behind
+                if ((w.Daemon_TopoHeight - w.account.TopoHeight) > 1000 ){ 
+                    w.account.booster = time.Now() // this will activate booster
+                }
 	}
 	w.dynamic_fees_per_kb = info.Dynamic_fee_per_kb // set fee rate, it can work for quite some time,
 
@@ -278,32 +296,49 @@ func (w *Wallet) Sync_Wallet_With_Daemon() {
 		return
 	}
 
+	// the daemon must first setup the height properly, then only we will proceed
+        if w.account.StartHeight <= -1 {
+        	return
+        }
+
 	rlog.Infof("wallet topo height %d daemon online topo height %d\n", w.account.TopoHeight, w.Daemon_TopoHeight)
 
-	start_height, err := w.DetectSyncPoint()
-	if err != nil {
+	runtime.GC()
+        
+        start_height := w.account.TopoHeight
+        
+        if start_height < w.account.StartHeight {
+            start_height = w.account.StartHeight
+        }
+
+        if start_height > 25 {
+            start_height = start_height - 25
+        }
+        if runtime.GOOS != "js" {
+            start_height_tmp, err := w.DetectSyncPoint()
+            if err != nil {
 		rlog.Errorf("Error while detecting sync point err %s", err)
-		return
-	}
+            return
+            }
+            start_height = int64(start_height_tmp)
+        }
+        
+    
 
 	// the safety cannot be tuned off in openbsd, see boltdb  documentation
 	// if we are doing major rescanning, turn of db safety features
 	// they will be activated again on resync
+
+
 	if (w.Daemon_TopoHeight - int64(start_height)) > 50 { // get db into async mode
-		w.Lock()
-		w.db.NoSync = true
-		w.Unlock()
-		defer func() {
-			w.Lock()
-			w.db.NoSync = false
-			w.db.Sync()
-			w.Unlock()
-		}()
+                w.disable_sync()
+		defer w.enable_sync()
 	}
+	
 
 	rlog.Infof("requesting outputs from height %d\n", start_height)
-
-	response, err := http.Get(fmt.Sprintf("%s/getoutputs.bin?startheight=%d",buildurl(w.Daemon_Endpoint), start_height))
+        
+        response, err := http.Get(fmt.Sprintf("%s/getoutputs.bin?startheight=%d",buildurl(w.Daemon_Endpoint), start_height))
 	if err != nil {
 		rlog.Errorf("Error while requesting outputs from daemon err %s", err)
 	} else {
@@ -323,9 +358,13 @@ func (w *Wallet) Sync_Wallet_With_Daemon() {
 		for i := 0; i < runtime.GOMAXPROCS(0); i++ {
 			workers <- i
 		}
+		
+		
+
+		
 		for {
 			var output globals.TX_Output_Data
-
+			
 			err = decoder.Decode(&output)
 			if err == io.EOF { // reached eof
 				break
@@ -340,6 +379,13 @@ func (w *Wallet) Sync_Wallet_With_Daemon() {
 				return
 			default:
 			}
+			
+			
+			
+			if runtime.GOOS == "js" {
+				w.Add_Transaction_Record_Funds(&output) // add the funds to wallet if they are ours
+			}else{
+
 
 			<-workers
 			// try to consume all data sent by the daemon
@@ -347,6 +393,7 @@ func (w *Wallet) Sync_Wallet_With_Daemon() {
 				w.Add_Transaction_Record_Funds(&output) // add the funds to wallet if they are ours
 				workers <- 0
 			}()
+		}
 
 		}
 
@@ -357,14 +404,38 @@ func (w *Wallet) Sync_Wallet_With_Daemon() {
 	return
 }
 
-// triggers syncing with wallet every 5 seconds
+// triggers syncing with wallet every Y seconds ( configurable)
+// less time means, higher resources consumption(network/compute) basically inversely proportional
 func (w *Wallet) sync_loop() {
+        counter := int64(86400)  // initial loop must go through ASAP
 	for {
+            
+                if w.account.delay_time < 7 {  // make sure time is sane
+                     w.account.delay_time = 7
+                }
 		select { // quit midway if required
 		case <-w.quit:
 			return
-		case <-time.After(5 * time.Second):
+		case <-time.After( time.Second):
 		}
+		
+		// if we are lagging behind do fast sync
+		if (w.Daemon_TopoHeight - w.account.TopoHeight) > 100 {
+                    counter = counter + 86400
+                }
+		
+		if counter <  w.account.delay_time {
+                    counter++
+                    
+                    // check whether booster is active, it activates after TX is sent, for 4 minutes
+                    // booster triggers every 7 seconds
+                    if counter  >= 7 &&  (time.Now().Sub(w.account.booster) < 4 * 60 * time.Second) { // apply booster
+                      //  rlog.Warnf("booster is active")
+                    }else{
+                        continue
+                    }
+                }
+                counter = 0
 
 		if !w.wallet_online_mode { // wallet requested to be in offline mode
 			return
@@ -386,72 +457,40 @@ func (w *Wallet) Rescan_From_Height(startheight uint64) {
 
 // offline file is scanned from start till finish
 func (w *Wallet) Scan_Offline_File(filename string) {
-	//w.Lock()
-//	defer w.Unlock()
+	w.Lock()
+	defer w.Unlock()
 
 	f, err := os.Open(filename)
 	if err != nil {
 		fmt.Printf("Cannot read offline data file=\"%s\"  err: %s   ", filename, err)
-		rlog.Warnf("Cannot read offline data file=\"%s\"  err: %s   ", filename, err)
 		return
 	}
 	bufreader := bufio.NewReader(f)
 	gzipreader, err := gzip.NewReader(bufreader)
 	if err != nil {
-		rlog.Warnf("Error while decompressing offline data file=\"%s\"  err: %s   ", filename, err)
+		fmt.Printf("Error while decompressing offline data file=\"%s\"  err: %s   ", filename, err)
 		return
 	}
 	defer gzipreader.Close()
 
-	// the safety cannot be tuned off in openbsd, see boltdb  documentation
-	// if we are doing major rescanning, turn of db safety features
-	// they will be activated again on resync
-	if 1==1 { // get db into async mode
-		w.Lock()
-		w.db.NoSync = true
-		w.Unlock()
-		defer func() {
-			w.Lock()
-			w.db.NoSync = false
-			w.db.Sync()
-			w.Unlock()
-		}()
-	}
-
 	// use the reader and feed the error free stream, if error occurs bailout
 	decoder := msgpack.NewDecoder(gzipreader)
-	rlog.Infof("Offline scanning started")
+	rlog.Debugf("Scanning started")
+	for {
+		var output globals.TX_Output_Data
 
-		workers := make(chan int, runtime.GOMAXPROCS(0))
-		for i := 0; i < runtime.GOMAXPROCS(0); i++ {
-			workers <- i
+		err = decoder.Decode(&output)
+		if err == io.EOF { // reached eof
+			break
 		}
-		for {
-			var output globals.TX_Output_Data
-
-			err = decoder.Decode(&output)
-			if err == io.EOF { // reached eof
-				break
-			}
-			if err != nil {
-				rlog.Errorf("err while decoding msgpack stream err %s\n", err)
-				break
-			}
-
-			select { // quit midway if required
-			case <-w.quit:
-				return
-			default:
-			}
-
-			<-workers
-			// try to consume all data sent by the daemon
-			go func() {
-				w.Add_Transaction_Record_Funds(&output) // add the funds to wallet if they are ours
-				workers <- 0
-			}()
-
+		if err != nil {
+			fmt.Printf("err while decoding msgpack stream err %s\n", err)
+			break
 		}
+		// try to consume all data sent by the daemon
+		w.Add_Transaction_Record_Funds(&output) // add the funds to wallet if they are ours
+
+	}
 	rlog.Debugf("Scanning finised")
 
 }
@@ -491,6 +530,7 @@ func (w *Wallet) SendTransaction(tx *transaction.Transaction) (err error) {
 	}
 
 	if result.Status == "OK" {
+                w.account.booster = time.Now() // this will activate booster
 		return nil
 	} else {
 		err = fmt.Errorf("Err %s", result.Status)
@@ -508,7 +548,6 @@ func (w *Wallet) SendTransaction(tx *transaction.Transaction) (err error) {
 // maybe the server can broadcast a bloomfilter or something else from the mempool keyimages
 //
 func (w *Wallet) IsKeyImageSpent(keyimage crypto.Key) (spent bool) {
-
 	defer func() {
 		if r := recover(); r != nil {
 			rlog.Warnf("Recovered while adding new block, Stack trace below keyimage %s", keyimage)
@@ -523,7 +562,7 @@ func (w *Wallet) IsKeyImageSpent(keyimage crypto.Key) (spent bool) {
 
 	spent = true // default assume the funds are spent
 
-	rlog.Warnf("checking whether key image are spent in pool %s", keyimage)
+	//rlog.Warnf("checking whether key image are spent in pool %s", keyimage)
 
 	var params structures.Is_Key_Image_Spent_Params
 	var result structures.Is_Key_Image_Spent_Result

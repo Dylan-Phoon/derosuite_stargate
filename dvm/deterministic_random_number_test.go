@@ -14,10 +14,45 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-package config
+package dvm
 
-import "github.com/blang/semver"
+//import "fmt"
+//import "reflect"
+import "testing"
 
-// right now it has to be manually changed
-// do we need to include git commitsha??
-var Version = semver.MustParse("3.0.0-0.Testnet.Stargate+02012019")
+import "github.com/deroproject/derosuite/crypto"
+
+// run the test
+func Test_RND_execution(t *testing.T) {
+
+	var SCID, BLID, TXID crypto.Key
+	SCID[0] = 22
+	rnd := Initialize_RND(SCID, BLID, TXID)
+
+	//get a random number
+	result_initial := rnd.Random()
+
+	// lets tweak , each parameter by a byte and check whether it affects the output
+	SCID[0] = 23
+	if Initialize_RND(SCID, BLID, TXID).Random() == result_initial {
+		t.Fatalf("RND not dependent on SCID")
+	}
+	SCID[0] = 0
+
+	BLID[0] = 22
+	if Initialize_RND(SCID, BLID, TXID).Random() == result_initial {
+		t.Fatalf("RND not dependent on BLID")
+	}
+	BLID[0] = 0
+
+	TXID[0] = 22
+	if Initialize_RND(SCID, BLID, TXID).Random() == result_initial {
+		t.Fatalf("RND not dependent on TXID")
+	}
+	TXID[0] = 22
+
+	if Initialize_RND(SCID, BLID, TXID).Random_MAX(10000) >= 10000 {
+		t.Fatalf("RND cannot be generated within a range")
+	}
+
+}

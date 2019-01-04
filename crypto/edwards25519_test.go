@@ -1716,12 +1716,14 @@ func TestElements(t *testing.T) {
 func TestPrecompute(t *testing.T) {
 
 	var table PRECOMPUTE_TABLE
+	var tmp_ex ExtendedGroupElement
 
 	s1 := *(RandomScalar())
 	//p1 := &GBASE //identity() // s1.PublicKey()
-	p1 := s1.PublicKey()
+	p1 := &GBASE
 
-	GenPrecompute(&table, *p1)
+        tmp_ex.FromBytes(p1)
+	MulPrecompute(&table, &tmp_ex)
 
 	//s1[1]=29
 
@@ -1745,11 +1747,14 @@ func TestPrecompute(t *testing.T) {
 func TestSuperPrecompute(t *testing.T) {
 	var table PRECOMPUTE_TABLE
 	var stable SUPER_PRECOMPUTE_TABLE
+	var tmp_ex ExtendedGroupElement
 
 	s1 := *(RandomScalar())
-	p1 := s1.PublicKey()
+	p1 := (RandomScalar()).PublicKey() //s1.PublicKey()
 
-	GenPrecompute(&table, *p1)
+	
+	  tmp_ex.FromBytes(p1)
+	MulPrecompute(&table, &tmp_ex)
 	GenSuperPrecompute(&stable, &table)
 
 	//s1[1]=29
@@ -1778,8 +1783,8 @@ func Test_DoubleScalarDoubleBaseMulPrecomputed(t *testing.T) {
 	s1 := *(RandomScalar())
 	s2 := *(RandomScalar()) //*(RandomScalar()) //*(identity()) // *(RandomScalar())
 
-	p1 := s1.PublicKey()
-	p2 := s2.PublicKey()
+	p1 := &GBASE //s1.PublicKey()
+	p2 := &H //s2.PublicKey()
 
 	first_part := ScalarMultKey(p1, &s1)
 	second_part := ScalarMultKey(p2, &s2)
@@ -1862,8 +1867,8 @@ func Test_DoubleScalarDoubleBaseMulPrecomputed64(t *testing.T) {
 		s1[i] = *(RandomScalar())
 		s2[i] = *(RandomScalar()) //*(RandomScalar()) //*(identity()) // *(RandomScalar())
 
-		p1[i] = *(s1[i].PublicKey())
-		p2[i] = *(s2[i].PublicKey())
+		p1[i] = GBASE //*(s1[i].PublicKey())
+		p2[i] = H  //*(s2[i].PublicKey())
 
 	}
 
@@ -1962,7 +1967,7 @@ func Benchmark_DoubleScalarDoubleBaseMulPrecomputed64(b *testing.B) {
 	}
 
 }
-
+/*
 func BenchmarkPrecompute(b *testing.B) {
 	var table PRECOMPUTE_TABLE
 
@@ -1971,16 +1976,7 @@ func BenchmarkPrecompute(b *testing.B) {
 	s1 := *(RandomScalar())
 	//s1[1]=29
 
-	/*
-	   	cpufile,err := os.Create("/tmp/precompute_cpuprofile.prof")
-	   			if err != nil{
-
-	   			}
-	   			if err := pprof.StartCPUProfile(cpufile); err != nil {
-	               }
-	           	defer pprof.StopCPUProfile()
-
-	*/
+	
 
 	var result_extended ExtendedGroupElement
 	result_extended.Zero() // make it identity
@@ -1995,6 +1991,7 @@ func BenchmarkPrecompute(b *testing.B) {
 	}
 }
 
+
 func BenchmarkSuperPrecompute(b *testing.B) {
 	var table PRECOMPUTE_TABLE
 	var stable SUPER_PRECOMPUTE_TABLE
@@ -2005,16 +2002,6 @@ func BenchmarkSuperPrecompute(b *testing.B) {
 	s1 := *(RandomScalar())
 	//s1[1]=29
 
-	/*
-	   	cpufile,err := os.Create("/tmp/superprecompute_cpuprofile.prof")
-	   			if err != nil{
-
-	   			}
-	   			if err := pprof.StartCPUProfile(cpufile); err != nil {
-	               }
-	           	defer pprof.StopCPUProfile()
-
-	*/
 
 	var result_extended ExtendedGroupElement
 	result_extended.Zero() // make it identity
@@ -2028,6 +2015,7 @@ func BenchmarkSuperPrecompute(b *testing.B) {
 
 	}
 }
+*/
 
 func BenchmarkGeScalarMultBase(b *testing.B) {
 	var s Key

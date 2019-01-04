@@ -483,8 +483,7 @@ func (chain *Blockchain) Add_TX_To_Pool(tx *transaction.Transaction) (result boo
 
 	// chain lock is no longer required as we only do readonly processing
 	//	chain.Lock()
-	//	defer chain.Unlock()
-
+	//	defer chain.Unlock()       
 	dbtx, err := chain.store.BeginTX(false)
 	if err != nil {
 		logger.Warnf("Could NOT create DB transaction  err %s", err)
@@ -1368,6 +1367,11 @@ func (chain *Blockchain) client_protocol(dbtx storage.DBTX, bl *block.Block, bli
 
 			//mark tx found in this block is valid
 			chain.mark_TX(dbtx, blid, bl.Tx_hashes[i], true)
+                        
+                        // execute SC TX if HF is active
+                        if bl.Major_Version >= 4{
+                            chain.Process_SC(dbtx,bl,tx,int64(bl.Major_Version) )
+                        }
 
 		} else { // TX is double spend or reincluded by 2 blocks simultaneously
 			rlog.Tracef(1,"Double spend TX is being ignored %s %s", blid, bl.Tx_hashes[i])
@@ -1395,6 +1399,11 @@ func (chain *Blockchain) client_protocol_reverse(dbtx storage.DBTX, bl *block.Bl
 
 			//mark tx found in this block is invalid
 			chain.mark_TX(dbtx, blid, bl.Tx_hashes[i], false)
+                        
+                        if bl.Major_Version >= 4{
+                            chain.Revert_SC(dbtx,crypto.Key(bl.Tx_hashes[i]),int64(bl.Major_Version) )
+                        }
+                        
 
 		} else { // TX is double spend or reincluded by 2 blocks simultaneously
 			// invalid tx is related

@@ -20,18 +20,21 @@ package walletapi
 
 import "io"
 
-//import "fmt"
+import "fmt"
 import "time"
 import "sync"
 import "log"
 import "strings"
 import "net/http"
+import "io/ioutil"
+import "encoding/base64"
 
-//import "github.com/intel-go/fastjson"
+import "github.com/intel-go/fastjson"
 import "github.com/osamingo/jsonrpc"
 
 import "github.com/deroproject/derosuite/globals"
 import "github.com/deroproject/derosuite/structures"
+//import "github.com/deroproject/derosuite/transaction"
 
 // all components requiring access to wallet must use , this struct to communicate
 // this structure must be update while mutex
@@ -223,6 +226,44 @@ func (r *RPCServer) Run() {
 
 	r.mux.HandleFunc("/", hello)
 	r.mux.Handle("/json_rpc", r)
+        
+        // handle SC installer,        // this will install an sc an
+        r.mux.HandleFunc("/install_sc", func (w http.ResponseWriter, req *http.Request){
+                var p structures.TransferSplit_Params
+    
+                b, err := ioutil.ReadAll(req.Body)
+                defer req.Body.Close()
+                if err != nil {
+                    http.Error(w, err.Error(), 500)
+                    return
+                }
+     
+                p.SCTX.SC = base64.StdEncoding.EncodeToString(b) // encode as base64
+     
+                encoded, err := fastjson.Marshal(p)
+     
+                if err != nil {
+                    http.Error(w, err.Error(), 500)
+                }
+     
+                params := fastjson.RawMessage(encoded)
+     
+                handler := TransferSplit_Handler{r: r}
+     
+     
+    result,jerr :=  handler.ServeJSONRPC(nil,&params) // transfer split handler
+    if jerr != nil {
+        encoded,_ = fastjson.Marshal(jerr)
+        fmt.Fprintf(w,string(encoded))
+        return
+    }
+    
+    encoded,_ = fastjson.Marshal(result) // give back result
+    fmt.Fprintf(w,string(encoded))
+     
+     
+    
+})
 	/*
 	   	// handle nasty http requests
 	   	r.mux.HandleFunc("/getoutputs.bin", getoutputs) // stream any outputs to server, can make wallet work offline
@@ -236,6 +277,8 @@ func (r *RPCServer) Run() {
 	}
 
 }
+
+
 
 func hello(w http.ResponseWriter, r *http.Request) {
 	io.WriteString(w, "Hello world!")

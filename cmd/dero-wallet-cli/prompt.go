@@ -257,7 +257,7 @@ func handle_prompt_command(l *readline.Instance, line string) {
 		}
 
 		offline := offline_mode
-		tx, inputs, input_sum, change, err := wallet.Transfer(addr_list, amount_list, 0, payment_id, 0, 0)
+		tx, inputs, input_sum, change, err := wallet.Transfer(addr_list, amount_list, 0, payment_id, 0, 0,nil)
 		build_relay_transaction(l, tx, inputs, input_sum, change, err, offline, amount_list)
 
 	case "q", "bye", "exit", "quit":

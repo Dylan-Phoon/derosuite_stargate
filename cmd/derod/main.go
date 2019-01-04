@@ -137,7 +137,7 @@ func main() {
 	globals.Logger.Infof("Daemon in %s mode", globals.Config.Name)
 	globals.Logger.Infof("Daemon data directory %s", globals.GetDataDirectory())
 
-	go check_update_loop ()
+	//go check_update_loop ()
 
 	params := map[string]interface{}{}
 
@@ -324,8 +324,10 @@ func main() {
 		return nil, 0, false
 	})
 	l.Refresh() // refresh the prompt
-
-         go func (){
+        
+        
+        
+        go func (){
             var gracefulStop = make(chan os.Signal)
             signal.Notify(gracefulStop,os.Interrupt) // listen to all signals
             for {
@@ -340,6 +342,12 @@ func main() {
 
 	for {
 		line, err := l.Readline()
+                
+                select {
+                    case <-Exit_In_Progress: fmt.Printf("exiting channel");break;
+                    default:
+                }
+                
 		if err == readline.ErrInterrupt {
 			if len(line) == 0 {
 				fmt.Print("Ctrl-C received, Exit in progress\n")
@@ -349,9 +357,13 @@ func main() {
 				continue
 			}
 		} else if err == io.EOF {
-			<-Exit_In_Progress
-		          break
+                     <-Exit_In_Progress
+                     break
 		}
+		
+
+		
+		
 
 		line = strings.TrimSpace(line)
 		line_parts := strings.Fields(line)
@@ -600,6 +612,36 @@ func main() {
 				fmt.Printf("mining stopped\n")
 			}
 			mining = false
+                case command == "sc_value":
+                    
+                       if len(line_parts) == 1 ||   len(line_parts) >= 4 {
+                           fmt.Printf("sc_value needs argument scid to print info\n")
+                           continue
+                       }
+
+                        txid, err := hex.DecodeString(strings.ToLower(line_parts[1]))
+
+				if err != nil {
+					fmt.Printf("err while decoding txid err %s\n", err)
+					continue
+				}
+				var scid crypto.Key
+				copy(scid[:32], []byte(txid))
+                        
+                                var key interface{}
+                                if len(line_parts) >= 3 {
+                                 if s, err := strconv.ParseUint(line_parts[2], 10, 64); err == nil {
+				   key = s
+                                }else{
+                                    key = line_parts[2]
+                                }
+                                    
+                                }
+			
+			balance, value := chain.ReadSCValue(nil,scid,key)
+                        fmt.Printf("sc %s balance %s DERO\n", scid, globals.FormatMoney12(balance))
+                        fmt.Printf("sc %s key \"%+v\": %+v\n", scid, key,value)
+
 
 		case command == "print_tree": // prints entire block chain tree
 			//WriteBlockChainTree(chain, "/tmp/graph.dot")
@@ -978,6 +1020,7 @@ func usage(w io.Writer) {
 	io.WriteString(w, "\t\033[1mstart_mining\033[0m\tStart mining <dero address> <number of threads>\n")
 	io.WriteString(w, "\t\033[1mstop_mining\033[0m\tStop daemon mining\n")
 	io.WriteString(w, "\t\033[1mpeer_list\033[0m\tPrint peer list\n")
+        io.WriteString(w, "\t\033[1msc_value\033[0m\tPrint sc balance and stored <scid> <key>\n")
 	io.WriteString(w, "\t\033[1msync_info\033[0m\tPrint information about connected peers and their state\n")
 	io.WriteString(w, "\t\033[1mbye\033[0m\t\tQuit the daemon\n")
 	io.WriteString(w, "\t\033[1mban\033[0m\t\tBan specific ip from making any connections\n")
@@ -1026,6 +1069,7 @@ var completer = readline.NewPrefixCompleter(
 	readline.PcItem("print_block"),
 	readline.PcItem("print_height"),
 	readline.PcItem("print_tx"),
+        readline.PcItem("sc_value"),
 	readline.PcItem("status"),
 	readline.PcItem("start_mining"),
 	readline.PcItem("stop_mining"),

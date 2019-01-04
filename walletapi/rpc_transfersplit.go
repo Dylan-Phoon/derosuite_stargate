@@ -20,6 +20,7 @@ import "fmt"
 import "context"
 import "encoding/hex"
 import "encoding/json"
+import "encoding/base64"
 
 //import	"log"
 //import 	"net/http"
@@ -28,9 +29,11 @@ import "github.com/romana/rlog"
 import "github.com/intel-go/fastjson"
 import "github.com/osamingo/jsonrpc"
 
+import "github.com/deroproject/derosuite/config"
 import "github.com/deroproject/derosuite/globals"
 import "github.com/deroproject/derosuite/address"
 import "github.com/deroproject/derosuite/structures"
+import "github.com/deroproject/derosuite/transaction"
 
 type TransferSplit_Handler struct { // this has access to the wallet
 	r *RPCServer
@@ -93,7 +96,37 @@ func (h TransferSplit_Handler) ServeJSONRPC(c context.Context, params *fastjson.
 
 		// TODO
 	}
-	tx, inputs, input_sum, change, err := h.r.w.Transfer(address_list, amount_list, unlock_time, payment_id, fees_per_kb, p.Mixin)
+	
+	tx_sc := &transaction.SC_Transaction{}
+	
+	fmt.Printf("tx_sc %+v\n", p.SCTX)
+	
+        if len(p.SCTX.SC) > 0 { // ddecode base64 layer
+             t, _ := base64.StdEncoding.DecodeString(p.SCTX.SC)
+             p.SCTX.SC = string(t)
+            
+        }
+	if len(p.SCTX.SC) > 0 || len(p.SCTX.EntryPoint) > 0 {
+            tx_sc = &p.SCTX
+        }else{
+            tx_sc = nil
+        }
+        
+        // user wants to deliver some DEROs to SC
+	if tx_sc !=  nil && tx_sc.Value != 0  {
+            var a address.Address   // a blank address to 0
+            if globals.IsMainnet() {
+                a.Network = config.Mainnet.Public_Address_Prefix
+            }else{
+                a.Network=  config.Testnet.Public_Address_Prefix
+            }
+            
+            address_list = append(address_list,a)
+            amount_list = append(amount_list,tx_sc.Value)
+            
+        }
+	
+	tx, inputs, input_sum, change, err := h.r.w.Transfer(address_list, amount_list, unlock_time, payment_id, fees_per_kb, p.Mixin,tx_sc)
 	_ = inputs
 	if err != nil {
 		rlog.Warnf("Error while building Transaction err %s\n", err)

@@ -342,7 +342,13 @@ var tx_template string = `{{define "tx"}}
                         <td>Signature type:  {{.info.Type}}</td>
                     </tr>
                     <tr>
-                        <td colspan="3">Extra: {{.info.Extra}}</td>
+                        <td colspan="3">Extra: 
+
+                        <div style=" word-break: break-all; height:100px;width:100%;border:1px solid #ccc;overflow:auto;">
+ {{.info.Extra}}
+</div>
+</td>
+
                     </tr>
                 </table>
               <h3>{{.info.Out}} output(s) for total of {{.info.Amount}} dero</h3>
@@ -357,12 +363,38 @@ var tx_template string = `{{define "tx"}}
                       {{range $i, $e := .info.OutAddress}} 
                       <tr>
                           <td>{{ $e }}</td>
-                          <td>{{$.info.Amount}}</td>
+                          <td>{{index $.info.OutAmount $i}}</td>
                           <td>{{index $.info.OutOffset $i}}</td>
                       </tr>
                       {{end}}
                   </table>
               </div>
+
+              {{if .info.SC_TX_Available}} 
+               <div style="text-align:left;border:2px solid grey ">
+               <table>
+
+                 <H3 style="margin:5px">Contains SC Transaction (data len : {{.info.SC_DataSize }} bytes)</H3>
+                    
+                 <H5 style="margin:5px">SC Balance: {{.info.SC_Balance_string }} DERO </H5>
+                    <H5 style="margin:5px">Signed by : {{.info.SC_Signer }} </H5>
+                    <H5 style="margin:5px">SC DERO input : {{.info.SC_TX.Value }} (atomic units ( divide by 10^12)) </H5>
+                    <H5 style="margin:5px">SC Code : </H5> <br/> <pre> {{.info.SC_TX.SC }} </pre>
+                    <H5 style="margin:5px">SCID  : {{.info.SC_TX.SCID }} </H5>
+                    <H5 style="margin:5px">Entrypoint  : {{.info.SC_TX.EntryPoint }} </H5>
+
+                    <tr>
+                    <H5 style="margin:5px;text-align:center">Parameters  :  </H5>
+                    </tr>
+                    {{range $k, $v := .info.SC_TX.Params}} 
+                      <tr>
+                    <H5 style="margin:5px;text-align:center;color:red;"> {{ $k  }} : {{$v}}</h5>
+                      {{end}}
+                </table>
+                </div>
+
+            {{end}}
+
               
 <!-- TODO currently we donot enable user to prove or decode something -->
 <br/>

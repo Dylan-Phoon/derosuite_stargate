@@ -44,6 +44,7 @@ import "github.com/deroproject/derosuite/transaction"
 //var CHAIN = []byte("CHAIN")    // this stores the actual chain, parents keeps child list, starts from genesis block
 
 var BLOCKCHAIN_UNIVERSE = []byte("U") //[]byte("BLOCKCHAIN_UNIVERSE") // all block chain data is store in this BLOCKCHAIN_UNIVERSE
+var SMARTCONTRACT_UNIVERSE = []byte("SC")
 
 // there are only 8 galaxies
 var GALAXY_BLOCK = []byte("GB")
@@ -65,6 +66,8 @@ var GALAXY_KEYVALUE = []byte("GKV") //[]byte("KEYVALUE") // used to store simple
 var TOP_HEIGHT = []byte("TOP_HEIGHT")   // stores current TOP HEIGHT, only stores single value
 var TOPO_HEIGHT = []byte("TOPO_HEIGHT") // stores current TOPO HEIGHT, only stores single value
 var TIPS = []byte("TIPS")               // this stores tips
+
+
 
 // the unique TXID or block ID becomes the solar system , which is common and saves lot of space
 
@@ -104,6 +107,10 @@ var PLANET_TX_BLOB = []byte("BLOB")          // contains serialised  TX , this a
 var PLANET_TX_MINED_IN_BLOCK = []byte("MBL") //[]byte("MINERBLOCK") // which blocks mined this tx, stores topo height of mined block
 var PLANET_TX_MINED = []byte("MIN")          // all blocks where tx is mined in in
 var PLANET_TX_SIZE = []byte("SIZE")
+
+var PLANET_TX_SC_BYTES = []byte("SC")
+var PLANET_TX_SC_PROCESSED = []byte("SCP")
+var PLANET_TX_SC_CHANGELOG = []byte("SCL")
 
 // the universe concept is there, as we bring in smart contracts, we will give each of them a universe to play within
 // while communicating with external universe

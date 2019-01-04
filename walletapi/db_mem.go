@@ -1,14 +1,19 @@
-// +build !wasm
+// +build js,wasm
 
 package walletapi
 
-import "os"
+//import "os"
 import "fmt"
-import "time"
+
+//import "time"
+//import "bytes"
+import "runtime"
 import "crypto/rand"
 import "crypto/sha1"
 import "sync"
 import "strings"
+
+//import "encoding/gob"
 import "encoding/hex"
 import "encoding/json"
 import "encoding/binary"
@@ -16,7 +21,6 @@ import "encoding/binary"
 import "github.com/romana/rlog"
 import "github.com/vmihailenco/msgpack"
 
-import bolt "github.com/coreos/bbolt"
 import "github.com/blang/semver"
 import "golang.org/x/crypto/pbkdf2" // // used to encrypt master password ( so user can change his password anytime)
 
@@ -29,10 +33,10 @@ const FUNDS_SPENT = "FUNDS_SPENT"              // indices of all funds already s
 const FUNDS_SPENT_WHERE = "FUNDS_SPENT_WHERE"  // mapping which output -> spent where
 const FUNDS_BUCKET_OUTGOING = "FUNDS_OUTGOING" // stores all tx where our funds were spent
 
-const RING_BUCKET = "RING_BUCKET"         //  to randomly choose ring members when transactions are created
-const KEYIMAGE_BUCKET = "KEYIMAGE_BUCKET" // used to track which funds have been spent (only on chain ) and which output was consumed
-const SECRET_KEY_BUCKET = "TXSECRETKEY"   // used to keep secret keys for any tx this wallet has created
-const TX_OUT_DETAILS_BUCKET = "TX_OUT_DETAILS"   // used to keep secret keys for any tx this wallet has created
+const RING_BUCKET = "RING_BUCKET"              //  to randomly choose ring members when transactions are created
+const KEYIMAGE_BUCKET = "KEYIMAGE_BUCKET"      // used to track which funds have been spent (only on chain ) and which output was consumed
+const SECRET_KEY_BUCKET = "TXSECRETKEY"        // used to keep secret keys for any tx this wallet has created
+const TX_OUT_DETAILS_BUCKET = "TX_OUT_DETAILS" // used to keep secret keys for any tx this wallet has created
 
 const HEIGHT_TO_BLOCK_BUCKET = "H2BLOCK_BUCKET" // used to track height to block hash mapping
 const OUR_TX_BUCKET = "OUR_TX_BUCKET"           // this contains all TXs in which we have spent OUR  FUNDS
@@ -99,12 +103,15 @@ type Wallet struct {
 	dynamic_fees_per_kb uint64
 	quit                chan bool // channel to quit any processing go routines
 
-	db *bolt.DB // access to DB
+//	db *bolt.DB // access to DB
+
+	DB_mem map[string]map[string]map[string][]byte `json:"DB_mem"`
 
 	rpcserver *RPCServer // reference to RPCserver
 
 	id string // first 8 bytes of wallet address , to put into logs to identify different wallets in case many are active
 
+	db_mem_mutex   sync.RWMutex
 	transfer_mutex sync.Mutex // to avoid races within the transfer
 	//sync.Mutex  // used to syncronise access
 	sync.RWMutex
@@ -127,19 +134,24 @@ func Create_Encrypted_Wallet(filename string, password string, seed crypto.Key) 
 		return
 	}
 
-	if _, err = os.Stat(filename); err == nil {
-		err = fmt.Errorf("File '%s' already exists", filename)
-		rlog.Errorf("err creating wallet %s", err)
-		return
-	}
+	/*
+		if _, err = os.Stat(filename); err == nil {
+			err = fmt.Errorf("File '%s' already exists", filename)
+			rlog.Errorf("err creating wallet %s", err)
+			return
+		}
+	*/
 
-	w.db, err = bolt.Open(filename, 0600, &bolt.Options{Timeout: 1 * time.Second})
+	w.DB_mem = map[string]map[string]map[string][]byte{}
 
-	if err != nil {
-		rlog.Errorf("err opening boltdb file %s", err)
-		return
-	}
+	/*
+		w.db, err = bolt.Open(filename, 0600, &bolt.Options{Timeout: 1 * time.Second})
 
+		if err != nil {
+			rlog.Errorf("err opening boltdb file %s", err)
+			return
+		}
+	*/
 	// generate account keys
 	w.account, err = Generate_Account_From_Seed(seed)
 	if err != nil {
@@ -158,6 +170,7 @@ func Create_Encrypted_Wallet(filename string, password string, seed crypto.Key) 
 	w.quit = make(chan bool)
 
 	w.id = string((w.account.GetAddress().String())[:8]) // set unique id for logs
+        
 
 	rlog.Infof("Successfully created wallet %s", w.id)
 	return
@@ -193,6 +206,8 @@ func Create_Encrypted_Wallet_Random(filename string, password string) (w *Wallet
 		rlog.Errorf("err %s", err)
 		return
 	}
+	w.account.StartHeight = -1 // new accounts are automatically set to ignore previous chain
+
 	// TODO setup seed language, default is already english
 	rlog.Infof("Successfully created wallet %s", w.id)
 	return
@@ -233,7 +248,7 @@ func Create_Encrypted_Wallet_ViewOnly(filename string, password string, viewkey 
 }
 
 // create an encrypted wallet using using random data
-func Create_Encrypted_Wallet_NonDeterministic(filename string, password string, secretkey,viewkey string) (w *Wallet, err error) {
+func Create_Encrypted_Wallet_NonDeterministic(filename string, password string, secretkey, viewkey string) (w *Wallet, err error) {
 
 	var secret_spend, secret_view crypto.Key
 	rlog.Infof("Creating View Only Wallet")
@@ -245,7 +260,6 @@ func Create_Encrypted_Wallet_NonDeterministic(filename string, password string, 
 	}
 
 	copy(secret_spend[:], spend_raw[:32])
-	
 
 	view_raw, err := hex.DecodeString(strings.TrimSpace(viewkey))
 	if len(view_raw) != 32 || err != nil {
@@ -269,7 +283,7 @@ func Create_Encrypted_Wallet_NonDeterministic(filename string, password string, 
 	w.account.Keys.Spendkey_Public = *(secret_spend.PublicKey())
 	w.account.Keys.Viewkey_Secret = secret_view
 	w.account.Keys.Viewkey_Public = *(secret_view.PublicKey())
-	
+
 	w.Save_Wallet() // save wallet data
 	rlog.Infof("Successfully created view only wallet %s", w.id)
 	return
@@ -292,6 +306,9 @@ func (w *Wallet) Set_Encrypted_Wallet_Password(password string) (err error) {
 	}
 	w.KDF.Keylen = 32
 	w.KDF.Iterations = 262144
+	if runtime.GOOS == "js" {
+		w.KDF.Iterations = 64 * 1024 // mobiles need to save battery
+	}
 	w.KDF.Hashfunction = "SHA1"
 
 	// lets generate the bcrypted password
@@ -304,49 +321,56 @@ func (w *Wallet) Set_Encrypted_Wallet_Password(password string) (err error) {
 	return
 }
 
-func Open_Encrypted_Wallet(filename string, password string) (w *Wallet, err error) {
+func Open_Encrypted_Wallet(filename string, password string, filedata []byte) (w *Wallet, err error) {
 	w = &Wallet{}
 
-	if _, err = os.Stat(filename); os.IsNotExist(err) {
-		err = fmt.Errorf("File '%s' does NOT exists", filename)
-		rlog.Errorf("err opening wallet %s", err)
-		return
+	if len(filedata) < 512 {
+		return nil, fmt.Errorf("Invalid/Corrupt waalet file")
 	}
 
-	w.db, err = bolt.Open(filename, 0600, &bolt.Options{Timeout: 1 * time.Second})
+	w.DB_mem = map[string]map[string]map[string][]byte{}
 
+	err = msgpack.Unmarshal(filedata, &w)
 	if err != nil {
-		rlog.Errorf("err opening boltdb %s", err)
-		return
+		rlog.Warnf("Loading Wallet err %s\n", err)
+		return nil, err
 	}
 
-	// read the metadata from metadat bucket
-	w.db.View(func(tx *bolt.Tx) error {
-		// Assume bucket exists and has keys
-		b := tx.Bucket([]byte(META_BUCKET))
+	/*
+		w.db, err = bolt.Open(filename, 0600, &bolt.Options{Timeout: 1 * time.Second})
 
-		v := b.Get([]byte(META_BUCKET))
-
-		if v == nil || len(v) == 0 {
-			err = fmt.Errorf("Invalid Database, Could not find meta data")
-			rlog.Errorf("err opening wallet %s", err)
-			return err
-		}
-
-		//fmt.Printf("v %+v\n",string(v)) // DO NOT dump account keys
-
-		// deserialize json data
-		err = json.Unmarshal(v, &w)
 		if err != nil {
-			rlog.Errorf("err parsing metabucket %s", err)
-			return err
+			rlog.Errorf("err opening boltdb %s", err)
+			return
 		}
 
-		w.quit = make(chan bool)
-		// todo make any routines necessary, such as sync etc
+		// read the metadata from metadat bucket
+		w.db.View(func(tx *bolt.Tx) error {
+			// Assume bucket exists and has keys
+			b := tx.Bucket([]byte(META_BUCKET))
 
-		return nil
-	})
+			v := b.Get([]byte(META_BUCKET))
+
+			if v == nil || len(v) == 0 {
+				err = fmt.Errorf("Invalid Database, Could not find meta data")
+				rlog.Errorf("err opening wallet %s", err)
+				return err
+			}
+
+			//fmt.Printf("v %+v\n",string(v)) // DO NOT dump account keys
+
+			// deserialize json data
+			err = json.Unmarshal(v, &w)
+			if err != nil {
+				rlog.Errorf("err parsing metabucket %s", err)
+				return err
+			}
+
+
+			// todo make any routines necessary, such as sync etc
+
+			return nil
+		})*/
 
 	// try to deseal password and store it
 	w.pbkdf2_password = Generate_Key(w.KDF, password)
@@ -356,7 +380,7 @@ func Open_Encrypted_Wallet(filename string, password string) (w *Wallet, err err
 	if err != nil {
 		rlog.Errorf("err opening secret err: %s ", err)
 		err = fmt.Errorf("Invalid Password")
-		w.db.Close()
+		//w.db.Close()
 		w = nil
 		return
 	}
@@ -367,7 +391,7 @@ func Open_Encrypted_Wallet(filename string, password string) (w *Wallet, err err
 	if err != nil {
 		rlog.Errorf("err opening account err: %s ", err)
 		err = fmt.Errorf("Invalid Password")
-		w.db.Close()
+		//w.db.Close()
 		w = nil
 		return
 	}
@@ -379,6 +403,8 @@ func Open_Encrypted_Wallet(filename string, password string) (w *Wallet, err err
 	}
 
 	w.id = string((w.account.GetAddress().String())[:8]) // set unique id for logs
+
+	w.quit = make(chan bool)
 
 	return
 
@@ -409,6 +435,10 @@ func (w *Wallet) Check_Password(password string) bool {
 
 // save updated copy of wallet
 func (w *Wallet) Save_Wallet() (err error) {
+    return
+}
+
+func (w *Wallet) Save_Wallet2() (err error) {
 	w.Lock()
 	defer w.Unlock()
 	if w == nil {
@@ -432,24 +462,27 @@ func (w *Wallet) Save_Wallet() (err error) {
 		return
 	}
 
-	// json marshal wallet data struct, serialize it, encrypt it and store it
-	serialized, err := json.Marshal(&w)
-	if err != nil {
-		return
-	}
-	//fmt.Printf("Serialized  %+v\n",serialized)
-
-	// let save the secret to DISK in encrypted form
-	err = w.db.Update(func(tx *bolt.Tx) (err error) {
-
-		bucket, err := tx.CreateBucketIfNotExists([]byte(META_BUCKET))
+	/*
+		// json marshal wallet data struct, serialize it, encrypt it and store it
+		serialized, err := json.Marshal(&w)
 		if err != nil {
 			return
 		}
-		err = bucket.Put([]byte(META_BUCKET), serialized)
-		return
+		//fmt.Printf("Serialized  %+v\n",serialized)
 
-	})
+		// let save the secret to DISK in encrypted form
+		err = w.db.Update(func(tx *bolt.Tx) (err error) {
+
+			bucket, err := tx.CreateBucketIfNotExists([]byte(META_BUCKET))
+			if err != nil {
+				return
+			}
+			err = bucket.Put([]byte(META_BUCKET), serialized)
+			return
+
+		})
+
+	*/
 	rlog.Infof("Saving wallet %s", w.id)
 	return
 }
@@ -458,12 +491,44 @@ func (w *Wallet) Save_Wallet() (err error) {
 func (w *Wallet) Close_Encrypted_Wallet() {
 	close(w.quit)
 
-	time.Sleep(time.Second) // give goroutines some time to quit
+	//time.Sleep(time.Second) // give goroutines some time to quit
 	rlog.Infof("Saving and Closing Wallet %s\n", w.id)
 	w.Save_Wallet()
-	w.db.Sync()
+	w = nil
+	//w.DB_mem = nil  // go GC will collect the items
+	//	w.db.Sync()
 
-	w.db.Close()
+	//	w.db.Close()
+}
+
+// this will give out an encrypted copy of the wallet
+func (w *Wallet) GetEncryptedCopy() ([]byte, error) {
+
+	var dump_bytes []byte
+
+	if w == nil {
+		return dump_bytes, fmt.Errorf("Wallet is nil")
+	}
+
+	w.Save_Wallet2()
+
+	w.Lock()
+	defer w.Unlock()
+
+	// Create an encoder and send a value.
+
+	/*enc := gob.NewEncoder(&dump)
+	err := enc.Encode(w)
+	*/
+	dump_bytes, err := msgpack.Marshal(&w)
+	if err != nil {
+		rlog.Warnf("Dumping Wallet err %s\n", err)
+		return dump_bytes, err
+	}
+
+	rlog.Infof("Dumping Wallet completed Successfully %d bytes", len(dump_bytes))
+
+	return dump_bytes, nil
 }
 
 // generate key from password
@@ -480,26 +545,26 @@ func Generate_Key(k KDF, password string) (key []byte) {
 // check whether a key exists
 func (w *Wallet) check_key_exists(universe []byte, subbucket []byte, key []byte) (result bool) {
 
+	w.db_mem_mutex.RLock()
+	defer w.db_mem_mutex.RUnlock()
 	//fmt.Printf("Checking %s %s %x \n", string(universe), string(subbucket), key)
 
-	w.db.View(func(tx *bolt.Tx) error {
-		universe_bucket := tx.Bucket(w.Key2Key(universe)) //open universe bucket
-		if universe_bucket == nil {
-			return nil
-		}
-		bucket := universe_bucket.Bucket(w.Key2Key(subbucket)) // open subbucket
-		if bucket == nil {
-			return nil
-		}
+	universe_map := w.DB_mem[string(w.Key2Key(universe))] //open universe bucket
+	if universe_map == nil {
+		return false
+	}
+	bucket := universe_map[string(w.Key2Key(subbucket))] // open subbucket
+	if bucket == nil {
+		return false
+	}
 
-		v := bucket.Get(w.Key2Key(key))
+	v := bucket[string(w.Key2Key(key))]
 
-		if v != nil {
-			// fmt.Printf("Found\n")
-			result = true
-		}
-		return nil
-	})
+	if v != nil {
+		// fmt.Printf("Found\n")
+		result = true
+	}
+
 	return // default is false
 }
 
@@ -507,21 +572,20 @@ func (w *Wallet) check_key_exists(universe []byte, subbucket []byte, key []byte)
 func (w *Wallet) delete_key(universe []byte, subbucket []byte, key []byte) {
 	rlog.Tracef(1, "Deleting %s %s %x\n", string(universe), string(subbucket), key)
 
-	w.db.Update(func(tx *bolt.Tx) (err error) {
-		universe_bucket, err := tx.CreateBucketIfNotExists(w.Key2Key(universe)) //open universe bucket
-		if err != nil {
-			return
-		}
-		bucket, err := universe_bucket.CreateBucketIfNotExists(w.Key2Key(subbucket)) // open subbucket
-		if err != nil {
-			return
-		}
+	w.db_mem_mutex.Lock()
+	defer w.db_mem_mutex.Unlock()
+	//fmt.Printf("Checking %s %s %x \n", string(universe), string(subbucket), key)
 
-		err = bucket.Delete(w.Key2Key(key))
+	universe_map := w.DB_mem[string(w.Key2Key(universe))] //open universe bucket
+	if universe_map == nil {
+		return
+	}
+	bucket := universe_map[string(w.Key2Key(subbucket))] // open subbucket
+	if bucket == nil {
+		return
+	}
 
-		return err // it will be nil
-
-	})
+	delete(bucket, string(w.Key2Key(key)))
 
 }
 
@@ -529,15 +593,14 @@ func (w *Wallet) delete_key(universe []byte, subbucket []byte, key []byte) {
 func (w *Wallet) delete_bucket(universe []byte, subbucket []byte) {
 	rlog.Tracef(1, "Deleting bucket %s %s \n", string(universe), string(subbucket))
 
-	w.db.Update(func(tx *bolt.Tx) (err error) {
-		universe_bucket, err := tx.CreateBucketIfNotExists(w.Key2Key(universe)) //open universe bucket
-		if err != nil {
-			return
-		}
-		err = universe_bucket.DeleteBucket(w.Key2Key(subbucket)) // delete subbucket
-		return err                                               // it will be nil
+	w.db_mem_mutex.Lock()
+	defer w.db_mem_mutex.Unlock()
 
-	})
+	universe_map := w.DB_mem[string(w.Key2Key(universe))] //open universe bucket
+	if universe_map == nil {
+		return
+	}
+	delete(universe_map, string(w.Key2Key(subbucket)))
 
 }
 
@@ -546,53 +609,56 @@ func (w *Wallet) store_key_value(universe []byte, subbucket []byte, key []byte, 
 
 	rlog.Tracef(1, "Storing %s %s %x\n", string(universe), string(subbucket), key)
 
-	return w.db.Update(func(tx *bolt.Tx) (err error) {
-		universe_bucket, err := tx.CreateBucketIfNotExists(w.Key2Key(universe)) //open universe bucket
-		if err != nil {
-			return
-		}
-		bucket, err := universe_bucket.CreateBucketIfNotExists(w.Key2Key(subbucket)) // open subbucket
-		if err != nil {
-			return
-		}
+	w.db_mem_mutex.Lock()
+	defer w.db_mem_mutex.Unlock()
 
-		encrypted_value, err := w.Encrypt(value) // encrypt and seal the value
-		if err != nil {
-			return
-		}
-		err = bucket.Put(w.Key2Key(key), encrypted_value)
+	universe_map := w.DB_mem[string(w.Key2Key(universe))] //open universe bucket
+	if universe_map == nil {
+		universe_map = map[string]map[string][]byte{}
+		w.DB_mem[string(w.Key2Key(universe))] = universe_map
 
-		return err // it will be nil
+	}
+	bucket := universe_map[string(w.Key2Key(subbucket))] // open subbucket
+	if bucket == nil {
+		bucket = map[string][]byte{}
+		w.DB_mem[string(w.Key2Key(universe))][string(w.Key2Key(subbucket))] = bucket
+	}
 
-	})
+	encrypted_value, err := w.Encrypt(value) // encrypt and seal the value
+	if err != nil {
+		return err
+	}
+	w.DB_mem[string(w.Key2Key(universe))][string(w.Key2Key(subbucket))][string(w.Key2Key(key))] = encrypted_value
+
+	return nil
 }
 
 func (w *Wallet) load_key_value(universe []byte, subbucket []byte, key []byte) (value []byte, err error) {
 
 	rlog.Tracef(1, "loading %s %s %x\n", string(universe), string(subbucket), key)
 
-	w.db.View(func(tx *bolt.Tx) (err error) {
-		universe_bucket := tx.Bucket(w.Key2Key(universe)) //open universe bucket
-		if universe_bucket == nil {
-			return nil
-		}
-		bucket := universe_bucket.Bucket(w.Key2Key(subbucket)) // open subbucket
-		if bucket == nil {
-			return nil
-		}
-		v := bucket.Get(w.Key2Key(key))
+	w.db_mem_mutex.RLock()
+	defer w.db_mem_mutex.RUnlock()
 
-		if v == nil {
-			return fmt.Errorf("%s %s %x NOT Found", string(universe), string(subbucket), key)
-		}
+	universe_map := w.DB_mem[string(w.Key2Key(universe))] //open universe bucket
+	if universe_map == nil {
+		return
 
-		// fmt.Printf("length of encrypted value %d\n",len(v))
+	}
+	bucket := universe_map[string(w.Key2Key(subbucket))] // open subbucket
+	if bucket == nil {
+		return
+	}
 
-		value, err = w.Decrypt(v)
+	v := bucket[string(w.Key2Key(key))]
+	if v == nil {
+		return value, fmt.Errorf("%s %s %x NOT Found", string(universe), string(subbucket), key)
+	}
 
-		return err // it will be nil if everything is alright
+	// fmt.Printf("length of encrypted value %d\n",len(v))
 
-	})
+	value, err = w.Decrypt(v)
+
 	return
 }
 
@@ -604,32 +670,26 @@ func (w *Wallet) load_key_value(universe []byte, subbucket []byte, key []byte) (
 // this function should only be called for FUNDS_AVAILABLE or FUNDS_SPENT bucket
 func (w *Wallet) load_all_values_from_bucket(universe []byte, subbucket []byte) (values [][]byte) {
 
-	w.db.View(func(tx *bolt.Tx) (err error) {
-		universe_bucket := tx.Bucket(w.Key2Key(universe)) //open universe bucket
-		if universe_bucket == nil {
+	w.db_mem_mutex.RLock()
+	defer w.db_mem_mutex.RUnlock()
 
-			return nil
+	universe_map := w.DB_mem[string(w.Key2Key(universe))] //open universe bucket
+	if universe_map == nil {
+		return
+
+	}
+	bucket := universe_map[string(w.Key2Key(subbucket))] // open subbucket
+	if bucket == nil {
+		return
+	}
+
+	for _, v := range bucket {
+		value, err := w.Decrypt(v)
+		if err == nil {
+			values = append(values, value)
 		}
-		bucket := universe_bucket.Bucket(w.Key2Key(subbucket)) // open subbucket
-		if bucket == nil {
-			return nil
-		}
+	}
 
-		//fmt.Printf("Enumerating Keys\n")
-		// Iterate over items
-		err = bucket.ForEach(func(k, v []byte) error {
-			//  fmt.Printf("Enumerated key\n")
-			value, err := w.Decrypt(v)
-			if err == nil {
-				values = append(values, value)
-			}
-
-			return err
-		})
-
-		return err // it will be nil if everything is alright
-
-	})
 	return
 }
 
@@ -654,16 +714,11 @@ func itob(v uint64) []byte {
 	return b
 }
 
-
+// place holders
 func (w *Wallet) disable_sync(){
-        w.Lock()
-        w.db.NoSync = true
-        w.Unlock()   
+  
 }
 
 func (w *Wallet) enable_sync(){
-        w.Lock()
-        w.db.NoSync = false
-        w.db.Sync()
-        w.Unlock()   
+
 }
