@@ -1,5 +1,5 @@
 /* Lotter Smart Contract in DVM-BASIC  
-   This lottery smart contract  will give lottery wins every  6th try on average
+   This lottery smart contract  will give lottery wins every  xth try.
 */
 
 
