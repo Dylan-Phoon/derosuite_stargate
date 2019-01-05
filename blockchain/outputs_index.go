@@ -177,6 +177,8 @@ func (chain *Blockchain) write_output_index(dbtx storage.DBTX, block_id crypto.H
 
 	// now loops through all the transactions, and store there ouutputs also
 	// however as per client protocol, only process accepted transactions
+	
+	
 	for i := 0; i < len(bl.Tx_hashes); i++ { // load all tx one by one
 
 		if !chain.IS_TX_Valid(dbtx, block_id, bl.Tx_hashes[i]) { // skip invalid TX
@@ -201,18 +203,14 @@ func (chain *Blockchain) write_output_index(dbtx storage.DBTX, block_id crypto.H
 		// TODO unlock specific outputs on specific height
 		o.Unlock_Height = uint64(height) + config.NORMAL_TX_AMOUNT_UNLOCK
 
-		// build the key image list and pack it
-		for j := 0; j < len(tx.Vin); j++ {
-			k_image := crypto.Key(tx.Vin[j].(transaction.Txin_to_key).K_image)
-			o.Key_Images = append(o.Key_Images, crypto.Key(k_image))
-		}
+		
 
 		// zero out fields between tx
 		o.Tx_Public_Key = crypto.Key(ZERO_HASH)
 		o.PaymentID = o.PaymentID[:0]
 
 		extra_parsed := tx.Parse_Extra()
-
+                key_images_done := false
 		// tx has been loaded, now lets get the vout
 		for j := uint64(0); j < uint64(len(tx.Vout)); j++ {
 
@@ -248,9 +246,18 @@ func (chain *Blockchain) write_output_index(dbtx storage.DBTX, block_id crypto.H
 
 			// include the key image list in the first output itself
 			// rest all the outputs donot contain the keyimage
-			if j != 0 && len(o.Key_Images) > 0 {
-				o.Key_Images = o.Key_Images[:0]
-			}
+			
+			if key_images_done  {
+                             o.Key_Images =  o.Key_Images[:0]
+                        }else{
+                            // build the key image list and pack it
+                            o.Key_Images =  o.Key_Images[:0]
+                            for k := 0; k < len(tx.Vin); k++ {
+                                k_image := crypto.Key(tx.Vin[k].(transaction.Txin_to_key).K_image)
+                                o.Key_Images = append(o.Key_Images, crypto.Key(k_image))
+                            }
+                        }
+			
 
 			if extra_parsed {
 				// store public key if present
@@ -287,12 +294,13 @@ func (chain *Blockchain) write_output_index(dbtx storage.DBTX, block_id crypto.H
 
 			dbtx.StoreObject(BLOCKCHAIN_UNIVERSE, GALAXY_OUTPUT_INDEX, GALAXY_OUTPUT_INDEX, itob(uint64(index_start)), serialized)
 
-			// fmt.Printf("index %d  %x\n",index_start,d.InKey.Destination)
                         index_within_tx++
 			
 			
 			var zero crypto.Key
 			if  o.InKey.Destination != zero { // cut SC inputs from outputs
+                            //rlog.Warnf("index %d  %x %+v\n",index_start,d.InKey.Destination,o)
+                            key_images_done=true
                             index_start++
                         }
 		}
@@ -326,6 +334,7 @@ func (chain *Blockchain) write_output_index(dbtx storage.DBTX, block_id crypto.H
                         o.Unlock_Height = 0
                         o.PaymentID = o.PaymentID[:0]
                         o.Index_within_tx = index_within_tx
+                        o.Key_Images =  o.Key_Images[:0]
                         
                         // generate one time keys
                         o.Tx_Public_Key,o.InKey.Destination = GetEphermalKey(crypto.Key(bl.Tx_hashes[i]),index_within_tx, changelog[0].TransferE[j].Address)
